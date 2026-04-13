@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+openai
+speechrecognition
+pyttsx3
+python-dotenv
+pyautogui
+psutil
+websockets
+sounddevice
+faster-whisper
