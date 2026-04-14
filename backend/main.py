@@ -52,12 +52,17 @@ def tts_worker():
         if text is None:
             break
 
-        is_speaking = True   # 🔴 speaking
+        try:
+            is_speaking = True
 
-        engine.say(text)
-        engine.runAndWait()
+            engine.say(text)
+            engine.runAndWait()
 
-        is_speaking = False  # 🟢 done
+        except Exception as e:
+            print("TTS error:", e)
+
+        finally:
+            is_speaking = False   # 🔥 ALWAYS RESET
 
         speech_queue.task_done()
 
@@ -83,10 +88,6 @@ recognizer.dynamic_energy_threshold = True
 def listen_from_mic():
     global is_speaking
 
-    if is_speaking:
-        time.sleep(0.3) 
-        return None
-
     time.sleep(0.5)
 
     print("\n🎤 Listening...")
@@ -96,6 +97,7 @@ def listen_from_mic():
 
     recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16',device=2)
     sd.wait()
+    print("⏹️ Recording complete")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         with wave.open(f.name, 'wb') as wf:
@@ -242,18 +244,19 @@ if __name__ == "__main__":
     greeting = f"Good day, {USER_NAME}. How can I assist you?"
     speak(greeting)
 
-while True:
-    print(" Loop running...")
+    while True:
+        print("🔁 Loop running...")
+        print("is_speaking:", is_speaking)
 
-    user_input = listen_from_mic()
+        user_input = listen_from_mic()
 
-    if not user_input:
-        time.sleep(0.5)
-        continue
+        if not user_input:
+            time.sleep(0.5)
+            continue
 
-    reply = get_response(user_input)
+        reply = get_response(user_input)
 
-    print("🤖 JARVIS:", reply)
-    speak(reply)
+        print("🤖 JARVIS:", reply)
+        speak(reply)
 
-    time.sleep(0.3)  
+        time.sleep(0.3)
