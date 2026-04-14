@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import tempfile
 import os
+import time
 import wave
 import sounddevice as sd
 import pyttsx3
@@ -28,6 +29,7 @@ app.add_middleware(
 
 load_dotenv()
 model = WhisperModel("base", device="cpu", compute_type="int8")
+is_speaking = False
 
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
@@ -43,12 +45,20 @@ engine.setProperty('rate', 180)
 speech_queue = queue.Queue()
 
 def tts_worker():
+    global is_speaking
+
     while True:
         text = speech_queue.get()
         if text is None:
             break
+
+        is_speaking = True   # 🔴 speaking
+
         engine.say(text)
         engine.runAndWait()
+
+        is_speaking = False  # 🟢 done
+
         speech_queue.task_done()
 
 threading.Thread(target=tts_worker, daemon=True).start()
@@ -69,15 +79,24 @@ recognizer = sr.Recognizer()
 recognizer.energy_threshold = 300
 recognizer.dynamic_energy_threshold = True
 
-def listen_from_mic():
-    print("\n🎤 Listening...")
-    fs = 16000
-    duration = 4  # seconds
 
-    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+def listen_from_mic():
+    global is_speaking
+
+    if is_speaking:
+        time.sleep(0.3) 
+        return None
+
+    time.sleep(0.5)
+
+    print("\n🎤 Listening...")
+
+    fs = 16000
+    duration = 6
+
+    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16',device=2)
     sd.wait()
 
-    # save temporary wav file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         with wave.open(f.name, 'wb') as wf:
             wf.setnchannels(1)
@@ -85,18 +104,19 @@ def listen_from_mic():
             wf.setframerate(fs)
             wf.writeframes(recording.tobytes())
 
-        segments, _ = model.transcribe(f.name)
+        segments, _ = model.transcribe(f.name, beam_size=5)
 
         text = ""
         for segment in segments:
             text += segment.text
 
-    if text.strip():
-        print("🧑 You said:", text)
-        return text
-    else:
-        print("❌ Couldn't understand")
+    text = text.strip().lower()
+
+    if text in ["", "you", "yeah", "uh", "hmm"]:
         return None
+
+    print("🧑 You said:", text)
+    return text
 # =========================
 # MEMORY
 # =========================
@@ -222,13 +242,18 @@ if __name__ == "__main__":
     greeting = f"Good day, {USER_NAME}. How can I assist you?"
     speak(greeting)
 
-    while True:
-        user_input = listen_from_mic()
+while True:
+    print(" Loop running...")
 
-        if not user_input:
-            continue
+    user_input = listen_from_mic()
 
-        reply = get_response(user_input)
+    if not user_input:
+        time.sleep(0.5)
+        continue
 
-        print("🤖 JARVIS:", reply)
-        speak(reply)
+    reply = get_response(user_input)
+
+    print("🤖 JARVIS:", reply)
+    speak(reply)
+
+    time.sleep(0.3)  

@@ -6,7 +6,7 @@ devices = [2, 3, 16, 18]
 for dev in devices:
     try:
         print(f"Testing device {dev} - speak now for 2 seconds...")
-        audio = sd.rec(int(2 * 16000), samplerate=16000, channels=1, dtype='float32', device=dev)
+        audio = sd.rec(int(2 * 16000), samplerate=16000, channels=1, dtype='float32', device=2)
         sd.wait()
         rms = np.sqrt(np.mean(audio**2))
         boosted = np.clip(audio * 10.0, -1.0, 1.0)
