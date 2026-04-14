@@ -1,7 +1,9 @@
 from fastapi import FastAPI, WebSocket
 from faster_whisper import WhisperModel
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketDisconnect
 from openai import OpenAI
+import numpy as np
 from dotenv import load_dotenv
 from datetime import datetime
 import tempfile
@@ -35,7 +37,7 @@ client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
 )
-
+print(sd.query_devices())
 # =========================
 # TTS SYSTEM (FIXED)
 # =========================
@@ -91,26 +93,36 @@ def listen_from_mic():
     time.sleep(0.5)
 
     print("\n🎤 Listening...")
+    device_info = sd.query_devices(16, 'input')
+    fs = int(device_info['default_samplerate'])
 
-    fs = 16000
+    print("Using sample rate:", fs)
+
+    fs = 44100
     duration = 6
 
-    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16',device=2)
+    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='float32',device=9)
     sd.wait()
     print("⏹️ Recording complete")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         with wave.open(f.name, 'wb') as wf:
             wf.setnchannels(1)
+            audio_int16 = (recording * 32767).astype(np.int16)
             wf.setsampwidth(2)
             wf.setframerate(fs)
-            wf.writeframes(recording.tobytes())
+            wf.writeframes(audio_int16.tobytes())
+
 
         segments, _ = model.transcribe(f.name, beam_size=5)
 
         text = ""
         for segment in segments:
             text += segment.text
+
+        print("RAW TEXT:", text)
+
+    return text if text.strip() else None
 
     text = text.strip().lower()
 
@@ -126,8 +138,6 @@ conversation_history = []
 MAX_TURNS = 15
 USER_NAME = "Swastik"
 
-active_connections = set()
-has_greeted = False
 
 # =========================
 # SYSTEM PROMPT
@@ -188,33 +198,30 @@ def get_response(user_input: str) -> str:
 # =========================
 # WEBSOCKET
 # =========================
+has_greeted = False   # ✅ GLOBAL
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global has_greeted
 
     await websocket.accept()
-
-    active_connections.add(websocket)
-    print("Client connected | Active:", len(active_connections))
+    print("Client connected")
 
     try:
-        greeting = f"Good day, {USER_NAME}. How can I assist you?"
-
-        await websocket.send_json({
-            "state": "SPEAKING",
-            "response": greeting,
-            "greeting": True
-        })
+        greeting = f"Good day, Swastik. How can I assist you?"
 
         if not has_greeted:
-            speak(greeting)
+            await websocket.send_json({
+                "state": "SPEAKING",
+                "response": greeting,
+                "greeting": True
+            })
             has_greeted = True
 
         while True:
             user_input = await websocket.receive_text()
-            print("User:", user_input)
 
-            await websocket.send_json({"state": "THINKING"})
+            print("User:", user_input)
 
             reply = get_response(user_input)
 
@@ -223,18 +230,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 "response": reply
             })
 
-            speak(reply)
+    except WebSocketDisconnect:
+        print("🔌 Client disconnected (normal)")
 
     except Exception as e:
-        print("WebSocket error:", e)
-
-    finally:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
-
-        print("Client disconnected | Active:", len(active_connections))
-
-
+        print("❌ Error:", e)
 # =========================
 # TERMINAL VOICE MODE (DEBUG)
 # =========================
@@ -242,7 +242,6 @@ if __name__ == "__main__":
     print("🚀 JARVIS Voice Mode Started")
 
     greeting = f"Good day, {USER_NAME}. How can I assist you?"
-    speak(greeting)
 
     while True:
         print("🔁 Loop running...")
@@ -257,6 +256,5 @@ if __name__ == "__main__":
         reply = get_response(user_input)
 
         print("🤖 JARVIS:", reply)
-        speak(reply)
 
         time.sleep(0.3)

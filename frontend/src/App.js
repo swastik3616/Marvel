@@ -61,57 +61,168 @@ export default function App() {
   }, []);
 
   // ── WebSocket ──────────────────────────────────────────
+
+  // 🔓 unlock speech
   useEffect(() => {
-    let ws;
+    const unlockSpeech = () => {
+      speechSynthesis.resume();
+      console.log("🔓 Speech unlocked");
+    };
+
+    document.addEventListener("click", unlockSpeech);
+
+    return () => {
+      document.removeEventListener("click", unlockSpeech);
+    };
+  }, []);
+
+  // 🔊 speak function
+  const isSpeakingRef = useRef(false);
+
+  function speak(text) {
+    if (!text || isSpeakingRef.current) return;
+
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    utterance.onstart = () => {
+      isSpeakingRef.current = true;
+      console.log("🟢 START SPEAKING");
+    };
+
+    utterance.onend = () => {
+      isSpeakingRef.current = false;
+      console.log("🔴 END SPEAKING");
+    };
+
+    utterance.onerror = (e) => {
+      isSpeakingRef.current = false;
+      console.log("❌ SPEECH ERROR:", e);
+    };
+
+    speechSynthesis.speak(utterance);
+  }
+
+  // 🌐 WebSocket
+  const wsRef = useRef(null);
+  const greetedRef = useRef(false);
+
+  useEffect(() => {
     let retryTimeout;
 
     const connect = () => {
-      try {
-        ws = new WebSocket("ws://localhost:8000/ws");
+      const ws = new WebSocket("ws://localhost:8000/ws");
+      wsRef.current = ws;
 
-        ws.onopen = () => {
-          setWsOk(true);
-          addLog("WS CONNECTED");
-        };
+      ws.onopen = () => {
+        setWsOk(true);
+        addLog("WS CONNECTED");
 
-        ws.onclose = () => {
-          setWsOk(false);
-          addLog("WS CLOSED — RETRY");
-          retryTimeout = setTimeout(connect, 3000);
-        };
+        // 🔥 start mic after connection
+        startListening(ws);
+      };
 
-        ws.onerror = () => { addLog("WS ERROR"); };
+      ws.onclose = () => {
+        setWsOk(false);
+        addLog("WS CLOSED — RETRY");
+        retryTimeout = setTimeout(connect, 3000);
+      };
 
-        ws.onmessage = (e) => {
-          const data = JSON.parse(e.data);
-          const s = data.state || "IDLE";
-          setState(s);
-          stateRef.current = s;
+      ws.onerror = () => addLog("WS ERROR");
 
-          // Greeting on first connect
-          if (data.greeting) {
-            setGreeting(data.response || "");
-            setResponse(data.response || "");
-            addLog("JARVIS: GREETING");
-          }
+      ws.onmessage = (e) => {
+        const data = JSON.parse(e.data);
 
-          if (data.user) {
-            addLog("USER: " + data.user.substring(0, 20));
-            setUserText(data.user);
-            setGreeting(""); // clear greeting once user speaks
-          }
+        const s = data.state || "IDLE";
+        setState(s);
+        stateRef.current = s;
 
-          if (data.response && !data.greeting) {
-            addLog("JARVIS REPLIED");
-            setResponse(data.response);
-          }
-        };
-      } catch { addLog("NO BACKEND"); }
+        // ✅ Greeting only once
+        if (data.greeting && !greetedRef.current) {
+          greetedRef.current = true;
+          setGreeting(data.response || "");
+          speak(data.response);
+          return;
+        }
+
+        // ✅ AI response
+        if (data.state === "SPEAKING" && data.response) {
+          setResponse(data.response);
+          speak(data.response);
+        }
+      };
     };
 
     connect();
-    return () => { ws?.close(); clearTimeout(retryTimeout); };
+
+    return () => {
+      wsRef.current?.close();
+      clearTimeout(retryTimeout);
+    };
   }, [addLog]);
+
+
+  function startListening(ws) {
+    let recognition;
+    let isListening = false;
+
+    const start = () => {
+      if (isListening) return;
+
+      recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+
+      recognition.lang = "en-US";
+      recognition.continuous = false;   // ✅ IMPORTANT
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        isListening = true;
+        console.log("🎤 Listening...");
+      };
+
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript.toLowerCase();
+        setUserText(text);
+        console.log("🧑 Heard:", text);
+
+        // 🔥 WAKE WORD
+        if (text.includes("jarvis")) {
+          const command = text.replace("jarvis", "").trim();
+
+          if (command) {
+            console.log("🚀 Sending:", command);
+            ws.send(command);
+          }
+        }
+      };
+
+      recognition.onerror = (err) => {
+        if (err.error === "aborted") {
+          // 🔥 ignore this (normal)
+          return;
+        }
+
+        console.log("❌ Mic error:", err.error);
+      };
+
+      recognition.onend = () => {
+        isListening = false;
+
+        // 🔥 SAFE RESTART (delay avoids abort error)
+        setTimeout(() => {
+          start();
+        }, 500);
+      };
+
+      try {
+        recognition.start();
+      } catch (e) {
+        console.log("⚠️ Restart blocked");
+      }
+    };
+
+    start();
+  }
+
 
   // ── Canvas loop ────────────────────────────────────────
   useEffect(() => {
@@ -428,44 +539,45 @@ export default function App() {
       </div>
     </div>
   );
-}
 
-function Panel({ title, children }) {
-  return (
-    <div style={{
-      border: "1px solid #00e5ff22",
-      background: "#020d1acc",
-      padding: 6,
-      position: "relative",
-    }}>
+
+  function Panel({ title, children }) {
+    return (
       <div style={{
-        color: "#00e5ff66", fontSize: 8,
-        letterSpacing: 2, textTransform: "uppercase", marginBottom: 4,
-      }}>{title}</div>
-      {children}
-    </div>
-  );
-}
-
-function Row({ label, val, col, mt, blink }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", margin: `${mt || 2}px 0`, fontSize: 9 }}>
-      <span style={{ color: "#00e5ff66" }}>{label}</span>
-      <span style={{ color: col || "#00e5ff", animation: blink ? "blink 1.2s infinite" : "none" }}>
-        {val}
-      </span>
-    </div>
-  );
-}
-
-function BarRow({ label, val, col }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "2px 0" }}>
-      <span style={{ width: 40, color: "#00e5ff66", fontSize: 8 }}>{label}</span>
-      <div style={{ flex: 1, height: 4, background: "#00e5ff22" }}>
-        <div style={{ width: `${val}%`, height: "100%", background: col, transition: "width 0.5s" }} />
+        border: "1px solid #00e5ff22",
+        background: "#020d1acc",
+        padding: 6,
+        position: "relative",
+      }}>
+        <div style={{
+          color: "#00e5ff66", fontSize: 8,
+          letterSpacing: 2, textTransform: "uppercase", marginBottom: 4,
+        }}>{title}</div>
+        {children}
       </div>
-      <span style={{ width: 28, textAlign: "right", fontSize: 8 }}>{val}%</span>
-    </div>
-  );
+    );
+  }
+
+  function Row({ label, val, col, mt, blink }) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", margin: `${mt || 2}px 0`, fontSize: 9 }}>
+        <span style={{ color: "#00e5ff66" }}>{label}</span>
+        <span style={{ color: col || "#00e5ff", animation: blink ? "blink 1.2s infinite" : "none" }}>
+          {val}
+        </span>
+      </div>
+    );
+  }
+
+  function BarRow({ label, val, col }) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "2px 0" }}>
+        <span style={{ width: 40, color: "#00e5ff66", fontSize: 8 }}>{label}</span>
+        <div style={{ flex: 1, height: 4, background: "#00e5ff22" }}>
+          <div style={{ width: `${val}%`, height: "100%", background: col, transition: "width 0.5s" }} />
+        </div>
+        <span style={{ width: 28, textAlign: "right", fontSize: 8 }}>{val}%</span>
+      </div>
+    );
+  }
 }
