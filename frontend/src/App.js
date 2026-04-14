@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const STATE_COLORS = {
   IDLE: "#00e5ff",
@@ -13,6 +13,46 @@ const STATE_SUBS = {
   PROCESSING: "AI THINKING...",
   SPEAKING: "GENERATING RESPONSE",
 };
+
+function Panel({ title, children }) {
+  return (
+    <div style={{
+      border: "1px solid #00e5ff22",
+      background: "#020d1acc",
+      padding: 6,
+      position: "relative",
+    }}>
+      <div style={{
+        color: "#00e5ff66", fontSize: 8,
+        letterSpacing: 2, textTransform: "uppercase", marginBottom: 4,
+      }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Row({ label, val, col, mt, blink }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", margin: `${mt || 2}px 0`, fontSize: 9 }}>
+      <span style={{ color: "#00e5ff66" }}>{label}</span>
+      <span style={{ color: col || "#00e5ff", animation: blink ? "blink 1.2s infinite" : "none" }}>
+        {val}
+      </span>
+    </div>
+  );
+}
+
+function BarRow({ label, val, col }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "2px 0" }}>
+      <span style={{ width: 40, color: "#00e5ff66", fontSize: 8 }}>{label}</span>
+      <div style={{ flex: 1, height: 4, background: "#00e5ff22" }}>
+        <div style={{ width: `${val}%`, height: "100%", background: col, transition: "width 0.5s" }} />
+      </div>
+      <span style={{ width: 28, textAlign: "right", fontSize: 8 }}>{val}%</span>
+    </div>
+  );
+}
 
 export default function App() {
   const [state, setState] = useState("IDLE");
@@ -36,6 +76,10 @@ export default function App() {
   const streamData = useRef(new Array(40).fill(0));
   const stateRef = useRef("IDLE");
   const animRef = useRef(null);
+  const wsRef = useRef(null);
+  const greetedRef = useRef(false);
+  const isSpeakingRef = useRef(false);
+
   const dotsRef = useRef(
     Array.from({ length: 8 }, () => ({
       r: Math.random() * 100 + 20,
@@ -44,11 +88,7 @@ export default function App() {
     }))
   );
 
-  const addLog = useCallback((msg) => {
-    setLogs(prev => [...prev, "> " + msg].slice(-8));
-  }, []);
-
-  // ── Clock ──────────────────────────────────────────────
+  // ── Clock ───────────────────────────────────
   useEffect(() => {
     const tick = () => {
       const now = new Date();
@@ -60,171 +100,217 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── WebSocket ──────────────────────────────────────────
+  // ── All stable callbacks via refs ───────────
+  // Instead of useCallback with deps, we store everything in refs
+  // so the WebSocket effect never needs to re-run
+  const setLogsRef = useRef(setLogs);
 
-  // 🔓 unlock speech
-  useEffect(() => {
-    const unlockSpeech = () => {
-      speechSynthesis.resume();
-      console.log("🔓 Speech unlocked");
-    };
+  const addLog = useRef((msg) => {
+    setLogsRef.current(prev => [...prev, "> " + msg].slice(-8));
+  }).current;
 
-    document.addEventListener("click", unlockSpeech);
+  const ttsQueue = useRef([]);
+  const ttsPlaying = useRef(false);
 
-    return () => {
-      document.removeEventListener("click", unlockSpeech);
-    };
-  }, []);
+  // Keep as a real ref (NOT .current) so the function can call itself recursively
+  const playNextInQueue = useRef(() => {
+    if (ttsQueue.current.length === 0) {
+      ttsPlaying.current = false;
+      isSpeakingRef.current = false;
+      stateRef.current = "IDLE";
+      setState("IDLE");
+      addLog("SPEECH COMPLETE");
+      return;
+    }
 
-  // 🔊 speak function
-  const isSpeakingRef = useRef(false);
-
-  function speak(text) {
-    if (!text || isSpeakingRef.current) return;
-
+    const text = ttsQueue.current.shift();
     const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    utterance.pitch = 0.95;
+    utterance.volume = 1;
 
-    utterance.onstart = () => {
-      isSpeakingRef.current = true;
-      console.log("🟢 START SPEAKING");
-    };
+    const voices = speechSynthesis.getVoices();
+    const preferred = voices.find(v =>
+      v.name.includes("Google") || v.name.includes("David") || v.name.includes("Mark")
+    );
+    if (preferred) utterance.voice = preferred;
 
-    utterance.onend = () => {
-      isSpeakingRef.current = false;
-      console.log("🔴 END SPEAKING");
-    };
-
+    utterance.onend = () => playNextInQueue.current();
     utterance.onerror = (e) => {
-      isSpeakingRef.current = false;
-      console.log("❌ SPEECH ERROR:", e);
+      if (e.error === "interrupted") return;
+      console.error("TTS error:", e);
+      playNextInQueue.current(); // keep queue moving
     };
 
     speechSynthesis.speak(utterance);
-  }
+  });
 
-  // 🌐 WebSocket
-  const wsRef = useRef(null);
-  const greetedRef = useRef(false);
+  const speak = useRef((text) => {
+    if (!text) return;
 
-  useEffect(() => {
-    let retryTimeout;
+    ttsQueue.current.push(text);
 
-    const connect = () => {
-      const ws = new WebSocket("ws://localhost:8000/ws");
-      wsRef.current = ws;
+    if (!ttsPlaying.current) {
+      ttsPlaying.current = true;
+      isSpeakingRef.current = true;
+      stateRef.current = "SPEAKING";
+      setState("SPEAKING");
+      playNextInQueue.current();
+    }
+    // If already playing, sentence is queued and will auto-play after current one
+  }).current;
 
-      ws.onopen = () => {
-        setWsOk(true);
-        addLog("WS CONNECTED");
+  const startListening = useRef((ws) => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { addLog("STT NOT SUPPORTED"); return; }
 
-        // 🔥 start mic after connection
-        startListening(ws);
-      };
-
-      ws.onclose = () => {
-        setWsOk(false);
-        addLog("WS CLOSED — RETRY");
-        retryTimeout = setTimeout(connect, 3000);
-      };
-
-      ws.onerror = () => addLog("WS ERROR");
-
-      ws.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-
-        const s = data.state || "IDLE";
-        setState(s);
-        stateRef.current = s;
-
-        // ✅ Greeting only once
-        if (data.greeting && !greetedRef.current) {
-          greetedRef.current = true;
-          setGreeting(data.response || "");
-          speak(data.response);
-          return;
-        }
-
-        // ✅ AI response
-        if (data.state === "SPEAKING" && data.response) {
-          setResponse(data.response);
-          speak(data.response);
-        }
-      };
-    };
-
-    connect();
-
-    return () => {
-      wsRef.current?.close();
-      clearTimeout(retryTimeout);
-    };
-  }, [addLog]);
-
-
-  function startListening(ws) {
     let recognition;
-    let isListening = false;
+    let active = false;
 
     const start = () => {
-      if (isListening) return;
+      if (isSpeakingRef.current) { setTimeout(start, 500); return; }
+      if (active) return;
+      if (ws.readyState !== WebSocket.OPEN) return; // ✅ stop if WS gone
 
-      recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-
+      recognition = new SpeechRecognition();
       recognition.lang = "en-US";
-      recognition.continuous = false;   // ✅ IMPORTANT
+      recognition.continuous = false;
       recognition.interimResults = false;
 
       recognition.onstart = () => {
-        isListening = true;
-        console.log("🎤 Listening...");
+        active = true;
+        stateRef.current = "LISTENING";
+        setState("LISTENING");
+        addLog("MIC ACTIVE");
       };
 
       recognition.onresult = (event) => {
-        const text = event.results[0][0].transcript.toLowerCase();
+        const text = event.results[0][0].transcript.toLowerCase().trim();
+        setState("IDLE");
+        stateRef.current = "IDLE";
         setUserText(text);
-        console.log("🧑 Heard:", text);
+        setGreeting("");
 
-        // 🔥 WAKE WORD
+        // Wake word detected
         if (text.includes("jarvis")) {
-          const command = text.replace("jarvis", "").trim();
-
-          if (command) {
-            console.log("🚀 Sending:", command);
-            ws.send(command);
+          if (ws.readyState === WebSocket.OPEN) {
+            stateRef.current = "PROCESSING";
+            setState("PROCESSING");
+            addLog("SENDING: " + text.substring(0, 18));
+            ws.send(text);
           }
         }
       };
 
       recognition.onerror = (err) => {
-        if (err.error === "aborted") {
-          // 🔥 ignore this (normal)
-          return;
-        }
-
-        console.log("❌ Mic error:", err.error);
+        if (err.error === "aborted" || err.error === "no-speech") return;
+        addLog("MIC ERR: " + err.error);
       };
 
       recognition.onend = () => {
-        isListening = false;
+        active = false;
+        if (ws.readyState !== WebSocket.OPEN) return; // ✅ stop loop if WS closed
 
-        // 🔥 SAFE RESTART (delay avoids abort error)
-        setTimeout(() => {
-          start();
-        }, 500);
+        const waitAndRestart = () => {
+          if (isSpeakingRef.current) {
+            setTimeout(waitAndRestart, 300); // keep waiting
+          } else {
+            setTimeout(start, 400); // JARVIS done — start mic
+          }
+        };
+
+        waitAndRestart();
       };
 
       try {
         recognition.start();
       } catch (e) {
-        console.log("⚠️ Restart blocked");
+        active = false;
+        // If start fails, onend won't fire. We MUST manually restart the loop so the mic doesn't permanently die.
+        setTimeout(start, 1000);
       }
     };
 
     start();
-  }
+  }).current;
 
+  // ── Speech unlock on first click ────────────
+  useEffect(() => {
+    const unlock = () => { speechSynthesis.cancel(); };
+    document.addEventListener("click", unlock, { once: true });
+    return () => document.removeEventListener("click", unlock);
+  }, []);
 
-  // ── Canvas loop ────────────────────────────────────────
+  // ── WebSocket — runs ONCE only ───────────────
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let retryTimeout;
+    let isMounted = true;
+
+    const connect = () => {
+      if (!isMounted) return;
+      const ws = new WebSocket("ws://localhost:8000/ws");
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (!isMounted) { ws.close(); return; }
+        setWsOk(true);
+        addLog("WS CONNECTED");
+        greetedRef.current = false;
+        startListening(ws);
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        setWsOk(false);
+        addLog("WS CLOSED — RETRY");
+        retryTimeout = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        if (isMounted) addLog("WS ERROR");
+      };
+
+      ws.onmessage = (e) => {
+        if (!isMounted) return;
+        const data = JSON.parse(e.data);
+        const s = data.state || "IDLE";
+        stateRef.current = s;
+        setState(s);
+
+        if (data.greeting && !greetedRef.current) {
+          greetedRef.current = true;
+          const greetText = data.response || "";
+          setGreeting(greetText);
+          setResponse(greetText);
+          addLog("JARVIS: GREETING");
+          speak(greetText);
+          return;
+        }
+
+        if (data.response) {
+          setResponse(data.response);
+          addLog("JARVIS REPLIED");
+          speak(data.response);
+        }
+
+        if (data.user) {
+          setUserText(data.user);
+          addLog("USER: " + data.user.substring(0, 18));
+        }
+      };
+    };
+
+    connect();
+    return () => {
+      isMounted = false;
+      wsRef.current?.close();
+      clearTimeout(retryTimeout);
+    };
+  }, []); // ✅ empty — truly runs once
+
+  // ── Canvas loop ──────────────────────────────
   useEffect(() => {
     const drawRadar = () => {
       const c = radarRef.current;
@@ -233,34 +319,25 @@ export default function App() {
       const W = 260, H = 260, cx = 130, cy = 130, R = 120;
       ctx.clearRect(0, 0, W, H);
       const col = STATE_COLORS[stateRef.current] || "#00e5ff";
-
       ctx.strokeStyle = col + "44"; ctx.lineWidth = 1;
       [R * 0.25, R * 0.5, R * 0.75, R].forEach(r => {
         ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
       });
-
       ctx.strokeStyle = col + "33";
       for (let i = 0; i < 12; i++) {
         const a = i * Math.PI / 6;
         ctx.beginPath(); ctx.moveTo(cx, cy);
         ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R); ctx.stroke();
       }
-
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(angleRef.current);
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(angleRef.current);
       const sweep = ctx.createLinearGradient(0, 0, R, 0);
-      sweep.addColorStop(0, col + "cc");
-      sweep.addColorStop(1, col + "00");
+      sweep.addColorStop(0, col + "cc"); sweep.addColorStop(1, col + "00");
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, -0.5, 0); ctx.closePath();
-      ctx.fillStyle = sweep; ctx.fill();
-      ctx.restore();
-
+      ctx.fillStyle = sweep; ctx.fill(); ctx.restore();
       ctx.strokeStyle = col; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(cx, cy);
       ctx.lineTo(cx + Math.cos(angleRef.current) * R, cy + Math.sin(angleRef.current) * R);
       ctx.stroke();
-
       dotsRef.current.forEach(d => {
         const da = ((angleRef.current - d.a) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
         const fade = da < 0.3 ? 1 : Math.max(0, 1 - (da / (Math.PI * 2)) * 3);
@@ -272,11 +349,9 @@ export default function App() {
           ctx.fill();
         }
       });
-
       ctx.strokeStyle = col + "55"; ctx.lineWidth = 0.5;
       ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
-
       angleRef.current += 0.025;
     };
 
@@ -308,8 +383,7 @@ export default function App() {
       ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx - R - 5, cy); ctx.lineTo(cx + R + 5, cy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx, cy - R - 5); ctx.lineTo(cx, cy + R + 5); ctx.stroke();
-      ctx.strokeStyle = col + "aa";
-      ctx.strokeRect(cx - 6, cy - 6, 12, 12);
+      ctx.strokeStyle = col + "aa"; ctx.strokeRect(cx - 6, cy - 6, 12, 12);
       ctx.fillStyle = col;
       ctx.beginPath(); ctx.arc(cx, cy, 2, 0, Math.PI * 2); ctx.fill();
       [1.3, 1.7, 2.1].forEach((m, i) => {
@@ -340,10 +414,7 @@ export default function App() {
     const loop = () => {
       const s = stateRef.current;
       const now = Date.now();
-
-      drawRadar();
-      drawTarget();
-
+      drawRadar(); drawTarget();
       waveData.current.shift();
       waveData.current.push(
         s === "LISTENING" ? Math.sin(now * 0.01) * 0.4 + Math.random() * 0.3 :
@@ -351,18 +422,15 @@ export default function App() {
             Math.random() * 0.05 - 0.025
       );
       drawWave(waveRef, waveData.current);
-
       voiceData.current.shift();
       voiceData.current.push(
         s === "LISTENING" ? Math.random() * 0.8 :
           s === "SPEAKING" ? Math.sin(now * 0.012) * 0.6 + 0.3 : 0.03
       );
       drawWave(voiceRef, voiceData.current);
-
       streamData.current.shift();
       streamData.current.push(Math.sin(now * 0.005) * 0.5 + Math.random() * 0.3);
       drawStream();
-
       animRef.current = requestAnimationFrame(loop);
     };
 
@@ -378,34 +446,25 @@ export default function App() {
     ? `JARVIS: ${greeting}`
     : userText
       ? `YOU: ${userText.toUpperCase()}`
-      : state === "SPEAKING"
-        ? "JARVIS IS SPEAKING..."
-        : "SPEAK TO ACTIVATE";
+      : state === "SPEAKING" ? "JARVIS IS SPEAKING..."
+        : "SAY 'JARVIS' TO ACTIVATE";
 
   return (
     <div style={{
-      background: "#020d1a",
-      width: "100vw", height: "100vh",
-      fontFamily: "'Courier New', monospace",
-      color: "#00e5ff",
-      fontSize: 10,
-      padding: 8,
+      background: "#020d1a", width: "100vw", height: "100vh",
+      fontFamily: "'Courier New', monospace", color: "#00e5ff",
+      fontSize: 10, padding: 8,
       display: "grid",
       gridTemplateColumns: "160px 1fr 160px",
       gridTemplateRows: "1fr auto",
-      gap: 6,
-      boxSizing: "border-box",
-      overflow: "hidden",
-      position: "relative",
+      gap: 6, boxSizing: "border-box", overflow: "hidden", position: "relative",
     }}>
-      {/* Scanlines */}
       <div style={{
         position: "absolute", inset: 0, pointerEvents: "none",
         background: "repeating-linear-gradient(0deg,transparent,transparent 2px,#00e5ff04 2px,#00e5ff04 4px)",
         zIndex: 10,
       }} />
 
-      {/* Corner decorations */}
       {[["top", "left"], ["top", "right"], ["bottom", "left"], ["bottom", "right"]].map(([v, h], i) => (
         <div key={i} style={{
           position: "absolute", [v]: 0, [h]: 0, width: 16, height: 16,
@@ -417,7 +476,7 @@ export default function App() {
         }} />
       ))}
 
-      {/* ── LEFT ── */}
+      {/* LEFT */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <Panel title="System Status">
           <Row label="CPU" val="68%" col={col} />
@@ -430,7 +489,6 @@ export default function App() {
             <BarRow label="SYNC" val={88} col={col} />
           </div>
         </Panel>
-
         <Panel title="Session Log">
           <div style={{ fontSize: 8, lineHeight: 1.6, color: "#00e5ff88", height: 80, overflow: "hidden" }}>
             {logs.slice(-6).map((l, i, arr) => (
@@ -438,7 +496,6 @@ export default function App() {
             ))}
           </div>
         </Panel>
-
         <Panel title="Audio Input">
           <canvas ref={waveRef} width={140} height={35} style={{ width: "100%", display: "block" }} />
           <Row label="FREQ" val="16 KHZ" col={col} mt={4} />
@@ -446,7 +503,7 @@ export default function App() {
         </Panel>
       </div>
 
-      {/* ── CENTER ── */}
+      {/* CENTER */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ color: "#00e5ff66", fontSize: 8, letterSpacing: 4, marginBottom: 4 }}>
@@ -460,29 +517,24 @@ export default function App() {
             {STATE_SUBS[state]}
           </div>
         </div>
-
         <canvas ref={radarRef} width={260} height={260} />
-
         <canvas ref={voiceRef} width={280} height={30} style={{ width: "100%", maxWidth: 280 }} />
-
         <div style={{
           textAlign: "center", fontSize: 9,
           color: state === "SPEAKING" ? "#ff4488cc" : "#00e5ffaa",
-          letterSpacing: 1, maxWidth: 280,
-          lineHeight: 1.6, minHeight: 32,
+          letterSpacing: 1, maxWidth: 280, lineHeight: 1.6, minHeight: 32,
           transition: "color 0.3s",
         }}>
           {centerText}
         </div>
       </div>
 
-      {/* ── RIGHT ── */}
+      {/* RIGHT */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <Panel title="Time / Date">
           <div style={{ fontSize: 16, letterSpacing: 2, color: "#fff", fontWeight: "bold" }}>{clock}</div>
           <div style={{ fontSize: 8, color: "#00e5ff66", marginTop: 2 }}>{dateStr}</div>
         </Panel>
-
         <Panel title="State Matrix">
           {["IDLE", "LISTENING", "PROCESSING", "SPEAKING"].map(s => (
             <div key={s} style={{ display: "flex", justifyContent: "space-between", margin: "2px 0", fontSize: 9 }}>
@@ -493,7 +545,6 @@ export default function App() {
             </div>
           ))}
         </Panel>
-
         <Panel title="Signal Strength">
           <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 30, margin: "4px 0" }}>
             {[20, 40, 60, 80, 100].map((h, i) => (
@@ -507,7 +558,6 @@ export default function App() {
           <Row label="STRENGTH" val={sigLabel} col={col} />
           <Row label="LATENCY" val="12MS" col={col} />
         </Panel>
-
         <Panel title="Response">
           <div style={{ fontSize: 8, color: "#00e5ffcc", lineHeight: 1.5, minHeight: 50 }}>
             {response.substring(0, 140)}{response.length > 140 ? "..." : ""}
@@ -515,69 +565,26 @@ export default function App() {
         </Panel>
       </div>
 
-      {/* ── BOTTOM ── */}
+      {/* BOTTOM */}
       <div style={{ gridColumn: "1/4", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
         <Panel title="Targeting Computer">
           <canvas ref={targetRef} width={140} height={50} style={{ width: "100%" }} />
           <Row label="MODE" val="VOICE TRACK" col={col} mt={4} />
           <Row label="STATUS" val="SCANNING" col={col} blink />
         </Panel>
-
         <Panel title="Data Stream">
           <canvas ref={streamRef} width={140} height={50} style={{ width: "100%" }} />
           <Row label="PROTOCOL" val="WEBSOCKET" col={col} mt={4} />
           <Row label="PORT" val="8000" col={col} />
         </Panel>
-
         <Panel title="Command Center">
-          <Row label="AI MODEL" val="GPT-4" col={col} />
-          <Row label="STT" val="WHISPER" col={col} />
-          <Row label="TTS" val="PYTTSX3" col={col} />
+          <Row label="AI MODEL" val="LLAMA 3.1" col={col} />
+          <Row label="STT" val="BROWSER" col={col} />
+          <Row label="TTS" val="WEB SPEECH" col={col} />
           <Row label="BACKEND" val={wsOk ? "LINKED" : "OFFLINE"} col={wsOk ? col : "#ff4444"} />
           <Row label="TARGET" val="LOCKED" col={col} blink />
         </Panel>
       </div>
     </div>
   );
-
-
-  function Panel({ title, children }) {
-    return (
-      <div style={{
-        border: "1px solid #00e5ff22",
-        background: "#020d1acc",
-        padding: 6,
-        position: "relative",
-      }}>
-        <div style={{
-          color: "#00e5ff66", fontSize: 8,
-          letterSpacing: 2, textTransform: "uppercase", marginBottom: 4,
-        }}>{title}</div>
-        {children}
-      </div>
-    );
-  }
-
-  function Row({ label, val, col, mt, blink }) {
-    return (
-      <div style={{ display: "flex", justifyContent: "space-between", margin: `${mt || 2}px 0`, fontSize: 9 }}>
-        <span style={{ color: "#00e5ff66" }}>{label}</span>
-        <span style={{ color: col || "#00e5ff", animation: blink ? "blink 1.2s infinite" : "none" }}>
-          {val}
-        </span>
-      </div>
-    );
-  }
-
-  function BarRow({ label, val, col }) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "2px 0" }}>
-        <span style={{ width: 40, color: "#00e5ff66", fontSize: 8 }}>{label}</span>
-        <div style={{ flex: 1, height: 4, background: "#00e5ff22" }}>
-          <div style={{ width: `${val}%`, height: "100%", background: col, transition: "width 0.5s" }} />
-        </div>
-        <span style={{ width: 28, textAlign: "right", fontSize: 8 }}>{val}%</span>
-      </div>
-    );
-  }
 }

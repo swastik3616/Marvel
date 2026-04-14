@@ -1,23 +1,14 @@
 from fastapi import FastAPI, WebSocket
-from faster_whisper import WhisperModel
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketDisconnect
 from openai import OpenAI
-import numpy as np
 from dotenv import load_dotenv
 from datetime import datetime
-import tempfile
 import os
-import time
-import wave
-import sounddevice as sd
-import pyttsx3
-import queue
-import threading
-import speech_recognition as sr
+import asyncio
 
 # =========================
-# APP SETUP
+# SETUP
 # =========================
 app = FastAPI()
 
@@ -30,121 +21,62 @@ app.add_middleware(
 )
 
 load_dotenv()
-model = WhisperModel("base", device="cpu", compute_type="int8")
-is_speaking = False
 
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
 )
-print(sd.query_devices())
-# =========================
-# TTS SYSTEM (FIXED)
-# =========================
-engine = pyttsx3.init()
-engine.setProperty('rate', 180)
 
-speech_queue = queue.Queue()
-
-def tts_worker():
-    global is_speaking
-
-    while True:
-        text = speech_queue.get()
-        if text is None:
-            break
-
-        try:
-            is_speaking = True
-
-            engine.say(text)
-            engine.runAndWait()
-
-        except Exception as e:
-            print("TTS error:", e)
-
-        finally:
-            is_speaking = False   # 🔥 ALWAYS RESET
-
-        speech_queue.task_done()
-
-threading.Thread(target=tts_worker, daemon=True).start()
-
-def speak(text):
-    while not speech_queue.empty():
-        try:
-            speech_queue.get_nowait()
-            speech_queue.task_done()
-        except:
-            break
-    speech_queue.put(text)
-
-# =========================
-# MIC SYSTEM (NO PYAUDIO NEEDED)
-# =========================
-recognizer = sr.Recognizer()
-recognizer.energy_threshold = 300
-recognizer.dynamic_energy_threshold = True
-
-
-def listen_from_mic():
-    global is_speaking
-
-    time.sleep(0.5)
-
-    print("\n🎤 Listening...")
-    device_info = sd.query_devices(16, 'input')
-    fs = int(device_info['default_samplerate'])
-
-    print("Using sample rate:", fs)
-
-    fs = 44100
-    duration = 6
-
-    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='float32',device=9)
-    sd.wait()
-    print("⏹️ Recording complete")
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-        with wave.open(f.name, 'wb') as wf:
-            wf.setnchannels(1)
-            audio_int16 = (recording * 32767).astype(np.int16)
-            wf.setsampwidth(2)
-            wf.setframerate(fs)
-            wf.writeframes(audio_int16.tobytes())
-
-
-        segments, _ = model.transcribe(f.name, beam_size=5)
-
-        text = ""
-        for segment in segments:
-            text += segment.text
-
-        print("RAW TEXT:", text)
-
-    return text if text.strip() else None
-
-    text = text.strip().lower()
-
-    if text in ["", "you", "yeah", "uh", "hmm"]:
-        return None
-
-    print("🧑 You said:", text)
-    return text
 # =========================
 # MEMORY
 # =========================
 conversation_history = []
-MAX_TURNS = 15
+MAX_TURNS = 8  # smaller = faster API calls
 USER_NAME = "Swastik"
 
+# =========================
+# GREETING
+# =========================
+def get_greeting() -> str:
+    hour = datetime.now().hour
+    greetings = {
+        "morning": [
+            f"Good morning, {USER_NAME}! Hope you slept well. What are we building today?",
+            f"Rise and shine, {USER_NAME}. All systems are online. What's the plan?",
+            f"Morning, {USER_NAME}. I've been waiting. What do you need from me today?",
+        ],
+        "afternoon": [
+            f"Good afternoon, {USER_NAME}. Hope the day's treating you well. What do you need?",
+            f"Hey {USER_NAME}, afternoon check-in. What are we working on?",
+            f"Good afternoon. Systems running smooth, {USER_NAME}. What's up?",
+        ],
+        "evening": [
+            f"Good evening, {USER_NAME}. Long day? What can I do for you?",
+            f"Evening, {USER_NAME}. Still going strong I see. What do you need?",
+            f"Hey {USER_NAME}, good evening. Ready when you are.",
+        ],
+        "night": [
+            f"Burning the midnight oil again, {USER_NAME}? What do you need?",
+            f"Late night session, {USER_NAME}. I'm here. What's on your mind?",
+            f"Still up, {USER_NAME}? Alright, I've got you. What do you need?",
+        ],
+    }
+
+    import random
+    if 5 <= hour < 12:
+        return random.choice(greetings["morning"])
+    elif 12 <= hour < 17:
+        return random.choice(greetings["afternoon"])
+    elif 17 <= hour < 21:
+        return random.choice(greetings["evening"])
+    else:
+        return random.choice(greetings["night"])
 
 # =========================
 # SYSTEM PROMPT
 # =========================
 def get_system_prompt() -> str:
     hour = datetime.now().hour
-
     if 5 <= hour < 12:
         time_ctx = "morning"
     elif 12 <= hour < 17:
@@ -154,107 +86,139 @@ def get_system_prompt() -> str:
     else:
         time_ctx = "late night"
 
-    return f"""You are JARVIS, a highly intelligent assistant.
-User: {USER_NAME}
-Time: {time_ctx}
+    return f"""You are JARVIS, a highly intelligent, witty, and loyal AI assistant inspired by Iron Man's JARVIS.
+User's name: {USER_NAME}
+Current time: {time_ctx}
 
-Rules:
-- Keep responses SHORT
-- Be confident
-- Slightly witty
-"""
+Personality rules:
+- Address {USER_NAME} by name occasionally — naturally, not every sentence
+- Keep responses SHORT and punchy — max 2-3 sentences for voice output
+- Be confident, sharp, slightly witty — like a genius butler
+- Reference time of day naturally when relevant
+- Never say "As an AI" — just handle it like JARVIS would
+- If asked what's new or for updates, give a brief helpful summary"""
 
 # =========================
-# AI RESPONSE
+# AI RESPONSE (STREAMING)
 # =========================
-def get_response(user_input: str) -> str:
+async def stream_response(user_input: str, websocket: WebSocket):
     global conversation_history
 
-    conversation_history.append({
-        "role": "user",
-        "content": user_input
-    })
-
+    conversation_history.append({"role": "user", "content": user_input})
     if len(conversation_history) > MAX_TURNS * 2:
         conversation_history = conversation_history[-MAX_TURNS * 2:]
 
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": get_system_prompt()},
-            *conversation_history
-        ],
-    )
+    # Run the blocking Groq streaming call in a thread
+    def make_stream():
+        return client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": get_system_prompt()},
+                *conversation_history
+            ],
+            max_tokens=120,
+            temperature=0.7,
+            stream=True,
+        )
 
-    reply = response.choices[0].message.content
+    stream = await asyncio.to_thread(make_stream)
 
-    conversation_history.append({
-        "role": "assistant",
-        "content": reply
-    })
+    full_reply = ""
+    buffer = ""
+    first_chunk = True
 
-    return reply
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if not delta:
+            continue
+
+        buffer += delta
+        full_reply += delta
+
+        # On the very first chunk, switch UI to SPEAKING immediately
+        if first_chunk:
+            first_chunk = False
+            await websocket.send_json({"state": "SPEAKING"})
+
+        # Send a sentence as soon as we hit a punctuation boundary
+        while True:
+            sent_end = -1
+            for punct in ['. ', '! ', '? ', '.\n', '!\n', '?\n']:
+                idx = buffer.find(punct)
+                if idx != -1 and (sent_end == -1 or idx < sent_end):
+                    sent_end = idx + len(punct)
+
+            if sent_end == -1:
+                break  # No complete sentence yet, keep buffering
+
+            sentence = buffer[:sent_end].strip()
+            buffer = buffer[sent_end:]
+            if sentence:
+                await websocket.send_json({
+                    "state": "SPEAKING",
+                    "response": sentence,
+                })
+
+    # Send any remaining text that didn't end with punctuation
+    if buffer.strip():
+        await websocket.send_json({
+            "state": "SPEAKING",
+            "response": buffer.strip(),
+        })
+
+    conversation_history.append({"role": "assistant", "content": full_reply})
+    print(f"[JARVIS] {full_reply}")
 
 # =========================
 # WEBSOCKET
 # =========================
-has_greeted = False   # ✅ GLOBAL
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global has_greeted
+    has_greeted = False
 
     await websocket.accept()
-    print("Client connected")
+    print("[JARVIS] Client connected")
 
     try:
-        greeting = f"Good day, Swastik. How can I assist you?"
-
         if not has_greeted:
+            greeting_text = get_greeting()
+            has_greeted = True
             await websocket.send_json({
                 "state": "SPEAKING",
-                "response": greeting,
+                "response": greeting_text,
                 "greeting": True
             })
-            has_greeted = True
+            print(f"[JARVIS] Greeting sent: {greeting_text}")
 
         while True:
-            user_input = await websocket.receive_text()
+            try:
+                user_input = await websocket.receive_text()
+                print(f"[USER] {user_input}")
 
-            print("User:", user_input)
+                await websocket.send_json({
+                    "state": "PROCESSING",
+                    "user": user_input
+                })
 
-            reply = get_response(user_input)
+                await stream_response(user_input, websocket)
 
-            await websocket.send_json({
-                "state": "SPEAKING",
-                "response": reply
-            })
-
-    except WebSocketDisconnect:
-        print("🔌 Client disconnected (normal)")
+            except WebSocketDisconnect:
+                print("[JARVIS] Client disconnected")
+                break
+            except Exception as e:
+                print(f"[API ERROR] {e}")
+                await websocket.send_json({
+                    "state": "SPEAKING",
+                    "response": "I encountered an error processing that. My apologies."
+                })
 
     except Exception as e:
-        print("❌ Error:", e)
+        print(f"[FATAL ERROR] {e}")
+
+
 # =========================
-# TERMINAL VOICE MODE (DEBUG)
+# HEALTH CHECK
 # =========================
-if __name__ == "__main__":
-    print("🚀 JARVIS Voice Mode Started")
-
-    greeting = f"Good day, {USER_NAME}. How can I assist you?"
-
-    while True:
-        print("🔁 Loop running...")
-        print("is_speaking:", is_speaking)
-
-        user_input = listen_from_mic()
-
-        if not user_input:
-            time.sleep(0.5)
-            continue
-
-        reply = get_response(user_input)
-
-        print("🤖 JARVIS:", reply)
-
-        time.sleep(0.3)
+@app.get("/health")
+def health():
+    return {"status": "JARVIS online", "user": USER_NAME}
