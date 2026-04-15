@@ -9,3 +9,6 @@ psutil
 websockets
 sounddevice
 faster-whisper
+winsdk
+pywin32
+pyperclip

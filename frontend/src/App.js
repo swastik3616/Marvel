@@ -14,6 +14,15 @@ const STATE_SUBS = {
   SPEAKING: "GENERATING RESPONSE",
 };
 
+// WhatsApp notification status badge colours
+const NOTIF_COLORS = {
+  awaiting: "#ff9900",   // orange — waiting for command
+  read:     "#00ff88",   // green — message was read
+  replied:  "#00e5ff",   // cyan — reply sent
+  ignored:  "#ffffff33", // faded — ignored
+  none:     "#ffffff11", // invisible — no notification
+};
+
 function Panel({ title, children }) {
   return (
     <div style={{
@@ -54,6 +63,83 @@ function BarRow({ label, val, col }) {
   );
 }
 
+// ── WhatsApp Notification Panel ───────────────────────────────────────────────
+function NotificationPanel({ notif, col }) {
+  if (!notif) {
+    return (
+      <Panel title="WhatsApp">
+        <div style={{ fontSize: 8, color: "#00e5ff33", lineHeight: 1.6 }}>
+          NO ACTIVE NOTIFICATION
+        </div>
+      </Panel>
+    );
+  }
+
+  const statusColor = NOTIF_COLORS[notif.status] || NOTIF_COLORS.awaiting;
+  const statusLabel = {
+    awaiting: "AWAITING COMMAND",
+    read:     "MESSAGE READ",
+    replied:  "REPLY SENT",
+    ignored:  "IGNORED",
+  }[notif.status] || "PENDING";
+
+  const pulse = notif.status === "awaiting"
+    ? "notifPulse 1.4s ease-in-out infinite"
+    : "none";
+
+  return (
+    <Panel title="WhatsApp">
+      {/* App badge */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 4, marginBottom: 5,
+      }}>
+        <div style={{
+          width: 6, height: 6, borderRadius: "50%",
+          background: statusColor,
+          animation: pulse,
+          boxShadow: notif.status === "awaiting" ? `0 0 8px ${statusColor}` : "none",
+        }} />
+        <span style={{ fontSize: 8, color: statusColor, letterSpacing: 1 }}>
+          {statusLabel}
+        </span>
+      </div>
+
+      {/* Sender */}
+      <div style={{ fontSize: 8, color: "#00e5ff66", marginBottom: 2 }}>FROM</div>
+      <div style={{
+        fontSize: 10, color: "#fff",
+        letterSpacing: 1, marginBottom: 4,
+        textShadow: `0 0 6px ${statusColor}`,
+      }}>
+        {notif.sender.toUpperCase()}
+      </div>
+
+      {/* Message preview */}
+      <div style={{ fontSize: 8, color: "#00e5ff66", marginBottom: 2 }}>MESSAGE</div>
+      <div style={{
+        fontSize: 8, color: "#00e5ffcc",
+        lineHeight: 1.5, wordBreak: "break-word",
+        maxHeight: 36, overflow: "hidden",
+      }}>
+        {notif.message.length > 80
+          ? notif.message.substring(0, 80) + "…"
+          : notif.message}
+      </div>
+
+      {/* Commands hint */}
+      {notif.status === "awaiting" && (
+        <div style={{
+          marginTop: 5, fontSize: 7, color: "#ff990088",
+          borderTop: "1px solid #ff990022", paddingTop: 4,
+          lineHeight: 1.7,
+        }}>
+          SAY: "READ IT" / "IGNORE" / "REPLY ..."
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState("IDLE");
   const [userText, setUserText] = useState("");
@@ -63,6 +149,11 @@ export default function App() {
   const [dateStr, setDateStr] = useState("");
   const [wsOk, setWsOk] = useState(false);
   const [greeting, setGreeting] = useState("");
+
+  // ── Notification state ────────────────────────────────────────────────────
+  // { sender, message, status: "awaiting"|"read"|"replied"|"ignored" }
+  const [notif, setNotif] = useState(null);
+  const notifRef = useRef(null);  // mirror for closures
 
   const radarRef = useRef(null);
   const waveRef = useRef(null);
@@ -88,7 +179,7 @@ export default function App() {
     }))
   );
 
-  // ── Clock ───────────────────────────────────
+  // ── Clock ───────────────────────────────────────────────────
   useEffect(() => {
     const tick = () => {
       const now = new Date();
@@ -100,9 +191,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── All stable callbacks via refs ───────────
-  // Instead of useCallback with deps, we store everything in refs
-  // so the WebSocket effect never needs to re-run
+  // ── All stable callbacks via refs ───────────────────────────
   const setLogsRef = useRef(setLogs);
 
   const addLog = useRef((msg) => {
@@ -112,7 +201,6 @@ export default function App() {
   const ttsQueue = useRef([]);
   const ttsPlaying = useRef(false);
 
-  // Keep as a real ref (NOT .current) so the function can call itself recursively
   const playNextInQueue = useRef(() => {
     if (ttsQueue.current.length === 0) {
       ttsPlaying.current = false;
@@ -139,7 +227,7 @@ export default function App() {
     utterance.onerror = (e) => {
       if (e.error === "interrupted") return;
       console.error("TTS error:", e);
-      playNextInQueue.current(); // keep queue moving
+      playNextInQueue.current();
     };
 
     speechSynthesis.speak(utterance);
@@ -157,9 +245,59 @@ export default function App() {
       setState("SPEAKING");
       playNextInQueue.current();
     }
-    // If already playing, sentence is queued and will auto-play after current one
   }).current;
 
+  // ── Notification command dispatcher ─────────────────────────
+  const handleNotifCommand = useRef((rawText, ws) => {
+    const text = rawText.toLowerCase().trim();
+    const currentNotif = notifRef.current;
+
+    if (!currentNotif || currentNotif.status !== "awaiting") return false;
+
+    // "yes" / "read it" / "read"
+    if (text === "yes" || text === "read it" || text === "read" || text === "read the message") {
+      ws.send("__notification_cmd__read");
+      setNotif(n => ({ ...n, status: "read" }));
+      notifRef.current = { ...currentNotif, status: "read" };
+      addLog("NOTIF: READ CMD");
+      return true;
+    }
+
+    // "ignore" / "no" / "skip"
+    if (text === "ignore" || text === "no" || text === "skip" || text === "dismiss") {
+      ws.send("__notification_cmd__ignore");
+      setNotif(n => ({ ...n, status: "ignored" }));
+      notifRef.current = { ...currentNotif, status: "ignored" };
+      addLog("NOTIF: IGNORED");
+      // Auto-clear after 3s
+      setTimeout(() => {
+        setNotif(null);
+        notifRef.current = null;
+      }, 3000);
+      return true;
+    }
+
+    // "reply ..."
+    if (text.startsWith("reply ")) {
+      const replyText = rawText.substring(6).trim(); // preserve original casing
+      if (replyText) {
+        ws.send(`__notification_cmd__reply:${replyText}`);
+        setNotif(n => ({ ...n, status: "replied" }));
+        notifRef.current = { ...currentNotif, status: "replied" };
+        addLog("NOTIF: REPLY SENT");
+        // Auto-clear after 4s
+        setTimeout(() => {
+          setNotif(null);
+          notifRef.current = null;
+        }, 4000);
+        return true;
+      }
+    }
+
+    return false; // not a notification command — pass to AI
+  }).current;
+
+  // ── Speech recognition ───────────────────────────────────────
   const startListening = useRef((ws) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) { addLog("STT NOT SUPPORTED"); return; }
@@ -170,7 +308,7 @@ export default function App() {
     const start = () => {
       if (isSpeakingRef.current) { setTimeout(start, 500); return; }
       if (active) return;
-      if (ws.readyState !== WebSocket.OPEN) return; // ✅ stop if WS gone
+      if (ws.readyState !== WebSocket.OPEN) return;
 
       recognition = new SpeechRecognition();
       recognition.lang = "en-US";
@@ -185,19 +323,23 @@ export default function App() {
       };
 
       recognition.onresult = (event) => {
-        const text = event.results[0][0].transcript.toLowerCase().trim();
+        const rawText = event.results[0][0].transcript.trim();
+        const text = rawText.toLowerCase();
         setState("IDLE");
         stateRef.current = "IDLE";
-        setUserText(text);
+        setUserText(rawText);
         setGreeting("");
 
-        // Wake word detected
+        // ── Notification command intercept (highest priority) ──
+        if (handleNotifCommand(rawText, ws)) return;
+
+        // ── Standard JARVIS wake word ──────────────────────────
         if (text.includes("jarvis")) {
           if (ws.readyState === WebSocket.OPEN) {
             stateRef.current = "PROCESSING";
             setState("PROCESSING");
-            addLog("SENDING: " + text.substring(0, 18));
-            ws.send(text);
+            addLog("SENDING: " + rawText.substring(0, 18));
+            ws.send(rawText);
           }
         }
       };
@@ -209,13 +351,13 @@ export default function App() {
 
       recognition.onend = () => {
         active = false;
-        if (ws.readyState !== WebSocket.OPEN) return; // ✅ stop loop if WS closed
+        if (ws.readyState !== WebSocket.OPEN) return;
 
         const waitAndRestart = () => {
           if (isSpeakingRef.current) {
-            setTimeout(waitAndRestart, 300); // keep waiting
+            setTimeout(waitAndRestart, 300);
           } else {
-            setTimeout(start, 400); // JARVIS done — start mic
+            setTimeout(start, 400);
           }
         };
 
@@ -226,7 +368,6 @@ export default function App() {
         recognition.start();
       } catch (e) {
         active = false;
-        // If start fails, onend won't fire. We MUST manually restart the loop so the mic doesn't permanently die.
         setTimeout(start, 1000);
       }
     };
@@ -234,16 +375,15 @@ export default function App() {
     start();
   }).current;
 
-  // ── Speech unlock on first click ────────────
+  // ── Speech unlock on first click ─────────────────────────────
   useEffect(() => {
     const unlock = () => { speechSynthesis.cancel(); };
     document.addEventListener("click", unlock, { once: true });
     return () => document.removeEventListener("click", unlock);
   }, []);
 
-  // ── WebSocket — runs ONCE only ───────────────
+  // ── WebSocket — runs ONCE only ────────────────────────────────
   // eslint-disable-next-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     let retryTimeout;
     let isMounted = true;
@@ -275,6 +415,49 @@ export default function App() {
       ws.onmessage = (e) => {
         if (!isMounted) return;
         const data = JSON.parse(e.data);
+
+        // ── WhatsApp notification broadcast ───────────────────
+        if (data.type === "whatsapp_notification") {
+          const newNotif = {
+            sender: data.sender,
+            message: data.message,
+            status: "awaiting",
+            timestamp: data.timestamp,
+          };
+          setNotif(newNotif);
+          notifRef.current = newNotif;
+
+          const alertText = `Swastik, you got a message from ${data.sender}. Should I read it?`;
+          setResponse(alertText);
+          addLog(`WHATSAPP: ${data.sender}`);
+          speak(alertText);
+          return;
+        }
+
+        // ── Notification action responses ─────────────────────
+        if (data.notification_action) {
+          const action = data.notification_action;
+          if (data.response) {
+            setResponse(data.response);
+            speak(data.response);
+          }
+          if (action === "ignored") {
+            setTimeout(() => {
+              setNotif(null);
+              notifRef.current = null;
+            }, 3000);
+          }
+          if (action === "replied" || action === "reply_failed") {
+            setTimeout(() => {
+              setNotif(null);
+              notifRef.current = null;
+            }, 4000);
+          }
+          addLog(`NOTIF ACT: ${action.toUpperCase()}`);
+          return;
+        }
+
+        // ── Standard JARVIS message flow ──────────────────────
         const s = data.state || "IDLE";
         stateRef.current = s;
         setState(s);
@@ -310,7 +493,7 @@ export default function App() {
     };
   }, []); // ✅ empty — truly runs once
 
-  // ── Canvas loop ──────────────────────────────
+  // ── Canvas loop ───────────────────────────────────────────────
   useEffect(() => {
     const drawRadar = () => {
       const c = radarRef.current;
@@ -444,147 +627,196 @@ export default function App() {
 
   const centerText = greeting && state === "SPEAKING"
     ? `JARVIS: ${greeting}`
-    : userText
-      ? `YOU: ${userText.toUpperCase()}`
-      : state === "SPEAKING" ? "JARVIS IS SPEAKING..."
-        : "SAY 'JARVIS' TO ACTIVATE";
+    : notif && notif.status === "awaiting" && state !== "SPEAKING"
+      ? `⚡ MSG FROM ${notif.sender.toUpperCase()} — SAY "READ IT" OR "IGNORE"`
+      : userText
+        ? `YOU: ${userText.toUpperCase()}`
+        : state === "SPEAKING" ? "JARVIS IS SPEAKING..."
+          : "SAY 'JARVIS' TO ACTIVATE";
+
+  // Determine notification indicator color for the top-right corner badge
+  const notifBadgeColor = notif
+    ? (notif.status === "awaiting" ? "#ff9900" : notif.status === "replied" ? "#00e5ff" : "#00ff88")
+    : "transparent";
 
   return (
-    <div style={{
-      background: "#020d1a", width: "100vw", height: "100vh",
-      fontFamily: "'Courier New', monospace", color: "#00e5ff",
-      fontSize: 10, padding: 8,
-      display: "grid",
-      gridTemplateColumns: "160px 1fr 160px",
-      gridTemplateRows: "1fr auto",
-      gap: 6, boxSizing: "border-box", overflow: "hidden", position: "relative",
-    }}>
+    <>
+      {/* Keyframe CSS injected globally */}
+      <style>{`
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        @keyframes notifPulse {
+          0%,100% { opacity: 1; transform: scale(1); }
+          50%      { opacity: 0.5; transform: scale(1.6); }
+        }
+        @keyframes notifSlideIn {
+          from { transform: translateY(-6px); opacity: 0; }
+          to   { transform: translateY(0);   opacity: 1; }
+        }
+      `}</style>
+
       <div style={{
-        position: "absolute", inset: 0, pointerEvents: "none",
-        background: "repeating-linear-gradient(0deg,transparent,transparent 2px,#00e5ff04 2px,#00e5ff04 4px)",
-        zIndex: 10,
-      }} />
-
-      {[["top", "left"], ["top", "right"], ["bottom", "left"], ["bottom", "right"]].map(([v, h], i) => (
-        <div key={i} style={{
-          position: "absolute", [v]: 0, [h]: 0, width: 16, height: 16,
-          borderTop: v === "top" ? `2px solid ${col}` : "none",
-          borderBottom: v === "bottom" ? `2px solid ${col}` : "none",
-          borderLeft: h === "left" ? `2px solid ${col}` : "none",
-          borderRight: h === "right" ? `2px solid ${col}` : "none",
-          zIndex: 11, transition: "border-color 0.4s",
-        }} />
-      ))}
-
-      {/* LEFT */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <Panel title="System Status">
-          <Row label="CPU" val="68%" col={col} />
-          <Row label="MEM" val="41%" col={col} />
-          <Row label="NET" val="ACTIVE" col={col} blink />
-          <Row label="AI" val={wsOk ? "ONLINE" : "OFFLINE"} col={wsOk ? col : "#ff4444"} />
-          <div style={{ marginTop: 6 }}>
-            <BarRow label="VOICE" val={state === "LISTENING" || state === "SPEAKING" ? 70 : 0} col={col} />
-            <BarRow label="PROC" val={72} col={col} />
-            <BarRow label="SYNC" val={88} col={col} />
-          </div>
-        </Panel>
-        <Panel title="Session Log">
-          <div style={{ fontSize: 8, lineHeight: 1.6, color: "#00e5ff88", height: 80, overflow: "hidden" }}>
-            {logs.slice(-6).map((l, i, arr) => (
-              <div key={i} style={{ color: i === arr.length - 1 ? col : "#00e5ff88" }}>{l}</div>
-            ))}
-          </div>
-        </Panel>
-        <Panel title="Audio Input">
-          <canvas ref={waveRef} width={140} height={35} style={{ width: "100%", display: "block" }} />
-          <Row label="FREQ" val="16 KHZ" col={col} mt={4} />
-          <Row label="DEVICE" val="INTEL MIC" col={col} />
-        </Panel>
-      </div>
-
-      {/* CENTER */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ color: "#00e5ff66", fontSize: 8, letterSpacing: 4, marginBottom: 4 }}>
-            J.A.R.V.I.S — AI ASSISTANT
-          </div>
-          <div style={{
-            fontSize: 22, letterSpacing: 8, color: "#fff",
-            textShadow: `0 0 14px ${col}`, transition: "all 0.4s",
-          }}>{state}</div>
-          <div style={{ color: "#00e5ff66", fontSize: 8, marginTop: 4 }}>
-            {STATE_SUBS[state]}
-          </div>
-        </div>
-        <canvas ref={radarRef} width={260} height={260} />
-        <canvas ref={voiceRef} width={280} height={30} style={{ width: "100%", maxWidth: 280 }} />
+        background: "#020d1a", width: "100vw", height: "100vh",
+        fontFamily: "'Courier New', monospace", color: "#00e5ff",
+        fontSize: 10, padding: 8,
+        display: "grid",
+        gridTemplateColumns: "160px 1fr 160px",
+        gridTemplateRows: "1fr auto",
+        gap: 6, boxSizing: "border-box", overflow: "hidden", position: "relative",
+      }}>
         <div style={{
-          textAlign: "center", fontSize: 9,
-          color: state === "SPEAKING" ? "#ff4488cc" : "#00e5ffaa",
-          letterSpacing: 1, maxWidth: 280, lineHeight: 1.6, minHeight: 32,
-          transition: "color 0.3s",
-        }}>
-          {centerText}
+          position: "absolute", inset: 0, pointerEvents: "none",
+          background: "repeating-linear-gradient(0deg,transparent,transparent 2px,#00e5ff04 2px,#00e5ff04 4px)",
+          zIndex: 10,
+        }} />
+
+        {/* Corner brackets */}
+        {[["top", "left"], ["top", "right"], ["bottom", "left"], ["bottom", "right"]].map(([v, h], i) => (
+          <div key={i} style={{
+            position: "absolute", [v]: 0, [h]: 0, width: 16, height: 16,
+            borderTop: v === "top" ? `2px solid ${col}` : "none",
+            borderBottom: v === "bottom" ? `2px solid ${col}` : "none",
+            borderLeft: h === "left" ? `2px solid ${col}` : "none",
+            borderRight: h === "right" ? `2px solid ${col}` : "none",
+            zIndex: 11, transition: "border-color 0.4s",
+          }} />
+        ))}
+
+        {/* WhatsApp active notification blinking dot — top-right corner */}
+        {notif && notif.status === "awaiting" && (
+          <div style={{
+            position: "absolute", top: 22, right: 22,
+            width: 8, height: 8, borderRadius: "50%",
+            background: "#ff9900",
+            animation: "notifPulse 1.4s ease-in-out infinite",
+            boxShadow: "0 0 10px #ff9900",
+            zIndex: 20,
+          }} />
+        )}
+
+        {/* LEFT */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <Panel title="System Status">
+            <Row label="CPU" val="68%" col={col} />
+            <Row label="MEM" val="41%" col={col} />
+            <Row label="NET" val="ACTIVE" col={col} blink />
+            <Row label="AI" val={wsOk ? "ONLINE" : "OFFLINE"} col={wsOk ? col : "#ff4444"} />
+            <div style={{ marginTop: 6 }}>
+              <BarRow label="VOICE" val={state === "LISTENING" || state === "SPEAKING" ? 70 : 0} col={col} />
+              <BarRow label="PROC" val={72} col={col} />
+              <BarRow label="SYNC" val={88} col={col} />
+            </div>
+          </Panel>
+          <Panel title="Session Log">
+            <div style={{ fontSize: 8, lineHeight: 1.6, color: "#00e5ff88", height: 80, overflow: "hidden" }}>
+              {logs.slice(-6).map((l, i, arr) => (
+                <div key={i} style={{ color: i === arr.length - 1 ? col : "#00e5ff88" }}>{l}</div>
+              ))}
+            </div>
+          </Panel>
+          <Panel title="Audio Input">
+            <canvas ref={waveRef} width={140} height={35} style={{ width: "100%", display: "block" }} />
+            <Row label="FREQ" val="16 KHZ" col={col} mt={4} />
+            <Row label="DEVICE" val="INTEL MIC" col={col} />
+          </Panel>
+        </div>
+
+        {/* CENTER */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ color: "#00e5ff66", fontSize: 8, letterSpacing: 4, marginBottom: 4 }}>
+              J.A.R.V.I.S — AI ASSISTANT
+            </div>
+            <div style={{
+              fontSize: 22, letterSpacing: 8, color: "#fff",
+              textShadow: `0 0 14px ${col}`, transition: "all 0.4s",
+            }}>{state}</div>
+            <div style={{ color: "#00e5ff66", fontSize: 8, marginTop: 4 }}>
+              {STATE_SUBS[state]}
+            </div>
+          </div>
+          <canvas ref={radarRef} width={260} height={260} />
+          <canvas ref={voiceRef} width={280} height={30} style={{ width: "100%", maxWidth: 280 }} />
+          <div style={{
+            textAlign: "center", fontSize: 9,
+            color: notif && notif.status === "awaiting"
+              ? "#ff990099"
+              : state === "SPEAKING" ? "#ff4488cc" : "#00e5ffaa",
+            letterSpacing: 1, maxWidth: 280, lineHeight: 1.6, minHeight: 32,
+            transition: "color 0.3s",
+            animation: notif && notif.status === "awaiting" ? "notifSlideIn 0.4s ease" : "none",
+          }}>
+            {centerText}
+          </div>
+        </div>
+
+        {/* RIGHT */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <Panel title="Time / Date">
+            <div style={{ fontSize: 16, letterSpacing: 2, color: "#fff", fontWeight: "bold" }}>{clock}</div>
+            <div style={{ fontSize: 8, color: "#00e5ff66", marginTop: 2 }}>{dateStr}</div>
+          </Panel>
+          <Panel title="State Matrix">
+            {["IDLE", "LISTENING", "PROCESSING", "SPEAKING"].map(s => (
+              <div key={s} style={{ display: "flex", justifyContent: "space-between", margin: "2px 0", fontSize: 9 }}>
+                <span style={{ color: "#00e5ff66" }}>{s}</span>
+                <span style={{ color: s === state ? col : "#00e5ff33" }}>
+                  {s === state ? "[ ● ]" : "[ — ]"}
+                </span>
+              </div>
+            ))}
+          </Panel>
+
+          {/* WhatsApp Notification Panel — replaces/supplements Signal Strength and Response */}
+          <Panel title="Signal Strength">
+            <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 30, margin: "4px 0" }}>
+              {[20, 40, 60, 80, 100].map((h, i) => (
+                <div key={i} style={{
+                  width: 8, height: `${h}%`,
+                  background: i < sigLevel ? col : col + "33",
+                  transition: "background 0.3s",
+                }} />
+              ))}
+            </div>
+            <Row label="STRENGTH" val={sigLabel} col={col} />
+            <Row label="LATENCY" val="12MS" col={col} />
+          </Panel>
+
+          {/* Live WhatsApp notification panel */}
+          <NotificationPanel notif={notif} col={col} />
+
+          <Panel title="Response">
+            <div style={{ fontSize: 8, color: "#00e5ffcc", lineHeight: 1.5, minHeight: 50 }}>
+              {response.substring(0, 140)}{response.length > 140 ? "..." : ""}
+            </div>
+          </Panel>
+        </div>
+
+        {/* BOTTOM */}
+        <div style={{ gridColumn: "1/4", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+          <Panel title="Targeting Computer">
+            <canvas ref={targetRef} width={140} height={50} style={{ width: "100%" }} />
+            <Row label="MODE" val="VOICE TRACK" col={col} mt={4} />
+            <Row label="STATUS" val="SCANNING" col={col} blink />
+          </Panel>
+          <Panel title="Data Stream">
+            <canvas ref={streamRef} width={140} height={50} style={{ width: "100%" }} />
+            <Row label="PROTOCOL" val="WEBSOCKET" col={col} mt={4} />
+            <Row label="PORT" val="8000" col={col} />
+          </Panel>
+          <Panel title="Command Center">
+            <Row label="AI MODEL" val="LLAMA 3.1" col={col} />
+            <Row label="STT" val="BROWSER" col={col} />
+            <Row label="TTS" val="WEB SPEECH" col={col} />
+            <Row label="BACKEND" val={wsOk ? "LINKED" : "OFFLINE"} col={wsOk ? col : "#ff4444"} />
+            <Row
+              label="WHATSAPP"
+              val={notif ? (notif.status === "awaiting" ? "PENDING ●" : notif.status.toUpperCase()) : "IDLE"}
+              col={notif ? notifBadgeColor : col + "44"}
+              blink={!!(notif && notif.status === "awaiting")}
+            />
+          </Panel>
         </div>
       </div>
-
-      {/* RIGHT */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <Panel title="Time / Date">
-          <div style={{ fontSize: 16, letterSpacing: 2, color: "#fff", fontWeight: "bold" }}>{clock}</div>
-          <div style={{ fontSize: 8, color: "#00e5ff66", marginTop: 2 }}>{dateStr}</div>
-        </Panel>
-        <Panel title="State Matrix">
-          {["IDLE", "LISTENING", "PROCESSING", "SPEAKING"].map(s => (
-            <div key={s} style={{ display: "flex", justifyContent: "space-between", margin: "2px 0", fontSize: 9 }}>
-              <span style={{ color: "#00e5ff66" }}>{s}</span>
-              <span style={{ color: s === state ? col : "#00e5ff33" }}>
-                {s === state ? "[ ● ]" : "[ — ]"}
-              </span>
-            </div>
-          ))}
-        </Panel>
-        <Panel title="Signal Strength">
-          <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 30, margin: "4px 0" }}>
-            {[20, 40, 60, 80, 100].map((h, i) => (
-              <div key={i} style={{
-                width: 8, height: `${h}%`,
-                background: i < sigLevel ? col : col + "33",
-                transition: "background 0.3s",
-              }} />
-            ))}
-          </div>
-          <Row label="STRENGTH" val={sigLabel} col={col} />
-          <Row label="LATENCY" val="12MS" col={col} />
-        </Panel>
-        <Panel title="Response">
-          <div style={{ fontSize: 8, color: "#00e5ffcc", lineHeight: 1.5, minHeight: 50 }}>
-            {response.substring(0, 140)}{response.length > 140 ? "..." : ""}
-          </div>
-        </Panel>
-      </div>
-
-      {/* BOTTOM */}
-      <div style={{ gridColumn: "1/4", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-        <Panel title="Targeting Computer">
-          <canvas ref={targetRef} width={140} height={50} style={{ width: "100%" }} />
-          <Row label="MODE" val="VOICE TRACK" col={col} mt={4} />
-          <Row label="STATUS" val="SCANNING" col={col} blink />
-        </Panel>
-        <Panel title="Data Stream">
-          <canvas ref={streamRef} width={140} height={50} style={{ width: "100%" }} />
-          <Row label="PROTOCOL" val="WEBSOCKET" col={col} mt={4} />
-          <Row label="PORT" val="8000" col={col} />
-        </Panel>
-        <Panel title="Command Center">
-          <Row label="AI MODEL" val="LLAMA 3.1" col={col} />
-          <Row label="STT" val="BROWSER" col={col} />
-          <Row label="TTS" val="WEB SPEECH" col={col} />
-          <Row label="BACKEND" val={wsOk ? "LINKED" : "OFFLINE"} col={wsOk ? col : "#ff4444"} />
-          <Row label="TARGET" val="LOCKED" col={col} blink />
-        </Panel>
-      </div>
-    </div>
+    </>
   );
 }
