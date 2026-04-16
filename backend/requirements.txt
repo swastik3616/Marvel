@@ -9,6 +9,10 @@ psutil
 websockets
 sounddevice
 faster-whisper
-winsdk
-pywin32
+winrt-Windows.UI.Notifications
+winrt-Windows.Data.Xml.Dom
+winrt-Windows.Storage
+winrt-Windows.System
+winrt-Windows.ApplicationModel.DataTransfer
 pyperclip
+requests

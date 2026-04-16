@@ -76,22 +76,29 @@ def _parse_whatsapp_body(title: str, body: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRIMARY: winsdk (Windows Runtime) — async event listener
+# PRIMARY: winrt (Python-WinRT 3.x, modular packages) — async event listener
+# Installed packages used:
+#   pip install winrt-Windows.UI.Notifications winrt-Windows.Data.Xml.Dom
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _winrt_listener():
-    """Subscribe to all Windows UserNotification events via winrt."""
-    from winsdk.windows.ui.notifications.management import UserNotificationListener
-    from winsdk.windows.ui.notifications import (
-        UserNotificationListenerAccessStatus,
+    """Subscribe to all Windows UserNotification events via winrt 3.x."""
+    # ── New modular winrt import style (NOT winsdk) ──────────────────────────
+    from winrt.windows.ui.notifications.management import (
+        UserNotificationListener,
+        UserNotificationListenerAccessStatus,  # lives in .management in winrt 3.x
+    )
+    from winrt.windows.ui.notifications import (
         KnownNotificationBindings,
         NotificationKinds,
     )
 
-    listener = UserNotificationListener.current
+    listener = UserNotificationListener.get_current()  # winrt 3.x uses get_current()
     status = await listener.request_access_async()
+
     if status != UserNotificationListenerAccessStatus.ALLOWED:
-        print("[NOTIF][winrt] Access denied — switching to fallback.")
+        print("[NOTIF][winrt] Access denied by Windows — switching to fallback.")
+        print("[NOTIF][winrt] Tip: Allow notification access in Windows Settings > Privacy > Notifications")
         return False
 
     print("[NOTIF][winrt] Access granted. Listening for WhatsApp notifications…")
@@ -101,36 +108,48 @@ async def _winrt_listener():
     while True:
         try:
             notifs = await listener.get_notifications_async(NotificationKinds.TOAST)
+
             for notif in notifs:
-                if notif.id in seen_ids:
+                nid = notif.id
+                if nid in seen_ids:
                     continue
-                seen_ids.add(notif.id)
+                seen_ids.add(nid)
 
                 try:
                     app_info = notif.app_info
+                    if app_info is None:
+                        continue
                     app_id = (app_info.app_user_model_id or "").lower()
                     if not _is_whatsapp(app_id):
                         continue
 
                     toast = notif.notification
-                    binding = toast.visual.get_binding(KnownNotificationBindings.toast_generic())
+                    binding = toast.visual.get_binding(
+                        KnownNotificationBindings.get_toast_generic()
+                    )
                     if binding is None:
                         continue
 
-                    texts = binding.get_text_elements()
-                    title = texts[0].text if len(texts) > 0 else ""
-                    body  = texts[1].text if len(texts) > 1 else ""
+                    # winrt 3.x: get_text_elements() returns an IVectorView
+                    text_elements = binding.get_text_elements()
+                    texts = [text_elements.get_at(i).text
+                             for i in range(text_elements.size)]
+
+                    title = texts[0] if len(texts) > 0 else ""
+                    body  = texts[1] if len(texts) > 1 else ""
 
                     sender, message = _parse_whatsapp_body(title, body)
                     if sender:
                         _post_notification(sender, message)
+
                 except Exception as inner:
-                    print(f"[NOTIF][winrt] Parse error: {inner}")
+                    print(f"[NOTIF][winrt] Parse error on notif {nid}: {inner}")
 
         except Exception as e:
             print(f"[NOTIF][winrt] Loop error: {e}")
 
         await asyncio.sleep(POLL_INTERVAL)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,26 +263,27 @@ async def main():
     else:
         print("[NOTIF] WARNING: Backend not reachable. Notifications will be retried.")
 
-    # Try primary (winrt) first
+    # Try primary (new modular winrt packages) first
     try:
-        import winsdk  # noqa: F401
-        print("[NOTIF] winsdk found — using Windows Runtime listener (primary)")
+        # Probe for winrt-Windows.UI.Notifications (the key package)
+        import winrt.windows.ui.notifications  # noqa: F401
+        print("[NOTIF] winrt-Windows.UI.Notifications found — using Windows Runtime listener (primary)")
         success = await _winrt_listener()
         if success is False:
-            raise RuntimeError("winrt access denied")
+            raise RuntimeError("winrt access denied by Windows")
     except ImportError:
-        print("[NOTIF] winsdk not found — trying pywin32 fallback")
+        print("[NOTIF] winrt packages not found — trying pywin32 fallback")
+        print("[NOTIF] Install with: pip install winrt-Windows.UI.Notifications")
         try:
             import win32gui  # noqa: F401
-            # Run blocking fallback in executor
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _pywin32_fallback)
         except ImportError:
-            print("[NOTIF] pywin32 not found — dropping into DEMO mode")
+            print("[NOTIF] pywin32 not found either — dropping into DEMO mode")
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _demo_mode)
     except Exception as e:
-        print(f"[NOTIF] Primary listener failed ({e}) — falling back")
+        print(f"[NOTIF] Primary listener failed ({e}) — falling back to demo mode")
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _demo_mode)
 
