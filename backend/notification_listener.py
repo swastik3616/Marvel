@@ -271,15 +271,15 @@ async def main():
         success = await _winrt_listener()
         if success is False:
             raise RuntimeError("winrt access denied by Windows")
-    except ImportError:
-        print("[NOTIF] winrt packages not found — trying pywin32 fallback")
-        print("[NOTIF] Install with: pip install winrt-Windows.UI.Notifications")
+    except ImportError as e:
+        print(f"[NOTIF] winrt packages not found: {e} — trying pywin32 fallback")
+        print("[NOTIF] Install with: pip install winrt-Windows.UI.Notifications winrt-Windows.UI.Notifications.Management")
         try:
             import win32gui  # noqa: F401
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _pywin32_fallback)
-        except ImportError:
-            print("[NOTIF] pywin32 not found either — dropping into DEMO mode")
+        except ImportError as e2:
+            print(f"[NOTIF] pywin32 not found either ({e2}) — dropping into DEMO mode")
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _demo_mode)
     except Exception as e:
