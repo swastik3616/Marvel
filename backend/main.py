@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import asyncio
 import hashlib
+from location import get_geolocation
 
 # =========================
 # SETUP
@@ -23,6 +24,17 @@ app.add_middleware(
 )
 
 load_dotenv()
+
+# =========================
+# GEOLOCATION STATE
+# =========================
+current_location = "Unknown (Fetching...)"
+
+@app.on_event("startup")
+async def startup_event():
+    global current_location
+    current_location = await asyncio.to_thread(get_geolocation)
+    print(f"[JARVIS] Startup complete. Location: {current_location}")
 
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
@@ -119,6 +131,7 @@ def get_system_prompt() -> str:
     return f"""You are JARVIS, a highly intelligent, witty, and loyal AI assistant inspired by Iron Man's JARVIS.
 User's name: {USER_NAME}
 Current time: {time_ctx}
+Current Location: {current_location}
 
 Personality rules:
 - Address {USER_NAME} by name occasionally — naturally, not every sentence
