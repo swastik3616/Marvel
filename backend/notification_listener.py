@@ -130,13 +130,24 @@ async def _winrt_listener():
                     if binding is None:
                         continue
 
-                    # winrt 3.x: get_text_elements() returns an IVectorView
                     text_elements = binding.get_text_elements()
                     texts = [text_elements.get_at(i).text
                              for i in range(text_elements.size)]
+                             
+                    print(f"[NOTIF][winrt] Raw WhatsApp notification texts: {texts}")
 
-                    title = texts[0] if len(texts) > 0 else ""
-                    body  = texts[1] if len(texts) > 1 else ""
+                    # Different versions of WhatsApp send different layouts
+                    if texts and texts[0].strip().lower() in {"whatsapp", "whatsapp desktop"}:
+                        title = texts[1] if len(texts) > 1 else ""
+                        body  = texts[2] if len(texts) > 2 else ""
+                    else:
+                        title = texts[0] if len(texts) > 0 else ""
+                        body  = texts[1] if len(texts) > 1 else ""
+
+                    # Sometimes the title is something like "2 new messages"
+                    if "new messages" in title.lower() and len(texts) >= 3:
+                        title = texts[1]
+                        body = texts[2]
 
                     sender, message = _parse_whatsapp_body(title, body)
                     if sender:
