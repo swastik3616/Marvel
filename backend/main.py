@@ -4,7 +4,10 @@ from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
+import tzlocal
 from datetime import datetime
+import time
+import requests
 import os
 import asyncio
 import hashlib
@@ -118,6 +121,27 @@ def get_greeting() -> str:
 # SYSTEM PROMPT
 # =========================
 def get_system_prompt() -> str:
+    now = datetime.now().astimezone()
+    
+    exact_time = now.strftime("%I:%M:%S %p")
+    timezone_name = str(now.tzinfo)
+    full_date = now.strftime("%d %B %Y")
+
+    return f"""
+You are JARVIS, a highly intelligent AI assistant.
+
+User's name: Swastik
+Current Date: {full_date}
+Current Exact Time: {exact_time}
+Current Timezone: {timezone_name}
+Current Location: {current_location}
+
+Rules:
+- Give accurate time when asked
+- Never guess another timezone
+- Keep replies short and smart
+- Use real current location and time only
+"""
     hour = datetime.now().hour
     if 5 <= hour < 12:
         time_ctx = "morning"
