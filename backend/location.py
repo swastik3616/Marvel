@@ -63,7 +63,11 @@ def reverse_geocode(lat, lon):
 # -----------------------------
 async def get_windows_location():
     try:
-        from winrt.windows.devices.geolocation import Geolocator
+        from winrt.windows.devices.geolocation import Geolocator, GeolocationAccessStatus
+
+        status = await Geolocator.request_access_async()
+        if status != GeolocationAccessStatus.ALLOWED:
+            return None
 
         locator = Geolocator()
         pos = await locator.get_geoposition_async()

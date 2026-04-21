@@ -10,7 +10,9 @@ websockets
 sounddevice
 faster-whisper
 winrt-Windows.UI.Notifications
+winrt-Windows.UI.Notifications.Management
 winrt-Windows.Data.Xml.Dom
+winrt-Windows.Devices.Geolocation
 winrt-Windows.Storage
 winrt-Windows.System
 winrt-Windows.ApplicationModel.DataTransfer
