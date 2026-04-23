@@ -12,6 +12,7 @@ import os
 import asyncio
 import hashlib
 from location import get_geolocation
+from weather import fetch_weather, weather_summary
 
 # =========================
 # SETUP
@@ -33,11 +34,33 @@ load_dotenv()
 # =========================
 current_location = "Unknown (Fetching...)"
 
+# =========================
+# WEATHER STATE
+# =========================
+current_weather: dict = {}
+WEATHER_REFRESH_INTERVAL = 600  # seconds (10 min)
+
 @app.on_event("startup")
 async def startup_event():
     global current_location
     current_location = await asyncio.to_thread(get_geolocation)
     print(f"[JARVIS] Startup complete. Location: {current_location}")
+    # Start weather refresh loop
+    asyncio.create_task(weather_refresh_loop())
+
+async def weather_refresh_loop():
+    global current_weather
+    while True:
+        try:
+            w = await asyncio.to_thread(fetch_weather)
+            if w:
+                current_weather = w
+                print(f"[WEATHER] Updated: {w['condition']} {w['temp']}°C in {w['location']}")
+            else:
+                print("[WEATHER] Fetch returned None")
+        except Exception as e:
+            print(f"[WEATHER] Refresh error: {e}")
+        await asyncio.sleep(WEATHER_REFRESH_INTERVAL)
 
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
@@ -127,6 +150,8 @@ def get_system_prompt() -> str:
     timezone_name = str(now.tzinfo)
     full_date = now.strftime("%d %B %Y")
 
+    wx_summary = weather_summary(current_weather) if current_weather else "Weather data is currently loading."
+
     return f"""
 You are JARVIS, a highly intelligent AI assistant.
 
@@ -136,11 +161,15 @@ Current Exact Time: {exact_time}
 Current Timezone: {timezone_name}
 Current Location: {current_location}
 
+Live Weather:
+{wx_summary}
+
 Rules:
-- Give accurate time when asked
+- Give accurate time and weather when asked — use the live data above
 - Never guess another timezone
-- Keep replies short and smart
-- Use real current location and time only
+- Keep replies short and smart (max 2-3 sentences for voice output)
+- Use real current location, time, and weather only
+- When asked about weather, include temperature, condition, and a brief forecast tip
 """
     hour = datetime.now().hour
     if 5 <= hour < 12:
@@ -424,6 +453,19 @@ async def websocket_endpoint(websocket: WebSocket):
         connected_clients.discard(websocket)
 
 # =========================
+# WEATHER ENDPOINT
+# =========================
+@app.get("/weather")
+async def get_weather():
+    if current_weather:
+        return current_weather
+    # Force a fresh fetch if cache is empty
+    w = await asyncio.to_thread(fetch_weather)
+    if w:
+        return w
+    raise HTTPException(status_code=503, detail="Weather data unavailable")
+
+# =========================
 # HEALTH CHECK
 # =========================
 @app.get("/health")
@@ -432,4 +474,5 @@ def health():
         "status": "JARVIS online",
         "user": USER_NAME,
         "notification_active": latest_notification.get("sender") is not None,
+        "weather": current_weather.get("condition", "loading") if current_weather else "loading",
     }

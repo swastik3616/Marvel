@@ -23,6 +23,17 @@ const NOTIF_COLORS = {
   none:     "#ffffff11", // invisible — no notification
 };
 
+// WMO code → simple category for animation
+function weatherCategory(code) {
+  if (code === 0 || code === 1) return "clear";
+  if (code <= 3)               return "cloudy";
+  if (code <= 55)              return "drizzle";
+  if (code <= 67)              return "rain";
+  if (code <= 77)              return "snow";
+  if (code <= 82)              return "rain";
+  return "storm";
+}
+
 function Panel({ title, children }) {
   return (
     <div style={{
@@ -60,6 +71,92 @@ function BarRow({ label, val, col }) {
       </div>
       <span style={{ width: 28, textAlign: "right", fontSize: 8 }}>{val}%</span>
     </div>
+  );
+}
+
+// ── Weather Panel ─────────────────────────────────────────────────────────────
+function WeatherPanel({ weather, col, loading }) {
+  if (loading || !weather) {
+    return (
+      <Panel title="Weather">
+        <div style={{ fontSize: 8, color: "#00e5ff33", lineHeight: 1.8 }}>
+          {loading ? "FETCHING WEATHER..." : "NO WEATHER DATA"}
+        </div>
+      </Panel>
+    );
+  }
+
+  const tempColor =
+    weather.temp >= 35 ? "#ff4444" :
+    weather.temp >= 25 ? "#ffaa00" :
+    weather.temp >= 15 ? col :
+    "#88ccff";
+
+  return (
+    <Panel title="Weather">
+      {/* Location */}
+      <div style={{ fontSize: 7, color: "#00e5ff55", marginBottom: 3, letterSpacing: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        📍 {weather.location?.toUpperCase()}
+      </div>
+
+      {/* Main temp + icon */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <div>
+          <div style={{ fontSize: 22, color: tempColor, fontWeight: "bold", lineHeight: 1, textShadow: `0 0 12px ${tempColor}` }}>
+            {weather.temp}°
+          </div>
+          <div style={{ fontSize: 7, color: "#00e5ff66", marginTop: 2 }}>FEELS {weather.feels_like}°C</div>
+        </div>
+        <div style={{ fontSize: 20, filter: "drop-shadow(0 0 6px #00e5ff66)" }}>{weather.icon}</div>
+      </div>
+
+      {/* Condition */}
+      <div style={{ fontSize: 8, color: col, letterSpacing: 1, marginBottom: 5 }}>
+        {weather.condition?.toUpperCase()}
+      </div>
+
+      {/* Stats grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 6px", marginBottom: 5 }}>
+        <Row label="HUM" val={`${weather.humidity}%`}    col={col} />
+        <Row label="WIND" val={`${weather.wind}km/h ${weather.wind_dir}`} col={col} />
+        <Row label="UV" val={`${weather.uv} ${weather.uv_label}`}    col={weather.uv >= 8 ? "#ff4444" : weather.uv >= 6 ? "#ffaa00" : col} />
+        <Row label="PRESS" val={`${weather.pressure}hPa`} col={col} />
+      </div>
+
+      {/* Hourly forecast */}
+      {weather.forecast_6h && weather.forecast_6h.length > 0 && (
+        <>
+          <div style={{ fontSize: 7, color: "#00e5ff44", letterSpacing: 1, marginBottom: 3, borderTop: "1px solid #00e5ff11", paddingTop: 3 }}>NEXT 6H</div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            {weather.forecast_6h.slice(0, 4).map((h, i) => (
+              <div key={i} style={{ textAlign: "center", fontSize: 7 }}>
+                <div style={{ color: "#00e5ff44" }}>{h.hour}</div>
+                <div style={{ fontSize: 11 }}>{h.icon}</div>
+                <div style={{ color: col }}>{h.temp}°</div>
+                {h.rain > 0 && <div style={{ color: "#88ccff", fontSize: 6 }}>{h.rain}%</div>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 3-day forecast */}
+      {weather.forecast_3d && weather.forecast_3d.length > 0 && (
+        <>
+          <div style={{ fontSize: 7, color: "#00e5ff44", letterSpacing: 1, marginBottom: 3, borderTop: "1px solid #00e5ff11", paddingTop: 4, marginTop: 4 }}>3-DAY</div>
+          {weather.forecast_3d.map((d, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 7, margin: "2px 0" }}>
+              <span style={{ color: "#00e5ff66", width: 22 }}>{d.day}</span>
+              <span style={{ fontSize: 10 }}>{d.icon}</span>
+              <span style={{ color: "#88ccff" }}>{d.min}°</span>
+              <span style={{ color: "#00e5ff44" }}>–</span>
+              <span style={{ color: tempColor }}>{d.max}°</span>
+              {d.rain > 0 && <span style={{ color: "#88ccff" }}>{d.rain}%💧</span>}
+            </div>
+          ))}
+        </>
+      )}
+    </Panel>
   );
 }
 
@@ -150,6 +247,11 @@ export default function App() {
   const [wsOk, setWsOk] = useState(false);
   const [greeting, setGreeting] = useState("");
 
+  // ── Weather state ─────────────────────────────────────────────────────────
+  const [weather, setWeather] = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(true);
+  const weatherIntervalRef = useRef(null);
+
   // ── Notification state ────────────────────────────────────────────────────
   // { sender, message, status: "awaiting"|"read"|"replied"|"ignored" }
   const [notif, setNotif] = useState(null);
@@ -189,6 +291,27 @@ export default function App() {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
+  }, []);
+
+  // ── Weather fetch ────────────────────────────────────────────
+  useEffect(() => {
+    const fetchWeather = async () => {
+      try {
+        setWeatherLoading(true);
+        const res = await fetch("http://localhost:8000/weather");
+        if (res.ok) {
+          const data = await res.json();
+          setWeather(data);
+        }
+      } catch (e) {
+        console.warn("Weather fetch failed:", e);
+      } finally {
+        setWeatherLoading(false);
+      }
+    };
+    fetchWeather();
+    weatherIntervalRef.current = setInterval(fetchWeather, 600_000);
+    return () => clearInterval(weatherIntervalRef.current);
   }, []);
 
   // ── All stable callbacks via refs ───────────────────────────
@@ -747,6 +870,22 @@ export default function App() {
           }}>
             {centerText}
           </div>
+
+          {/* Compact weather strip */}
+          {weather && !weatherLoading && (
+            <div style={{
+              display: "flex", gap: 10, alignItems: "center", justifyContent: "center",
+              fontSize: 8, color: "#00e5ff66", letterSpacing: 1, marginTop: -4,
+            }}>
+              <span>{weather.icon} {weather.temp}°C</span>
+              <span style={{ color: "#00e5ff33" }}>|</span>
+              <span>{weather.condition?.toUpperCase()}</span>
+              <span style={{ color: "#00e5ff33" }}>|</span>
+              <span>💧{weather.humidity}%</span>
+              <span style={{ color: "#00e5ff33" }}>|</span>
+              <span>💨{weather.wind}km/h</span>
+            </div>
+          )}
         </div>
 
         {/* RIGHT */}
@@ -781,6 +920,9 @@ export default function App() {
             <Row label="LATENCY" val="12MS" col={col} />
           </Panel>
 
+          {/* Live weather panel */}
+          <WeatherPanel weather={weather} col={col} loading={weatherLoading} />
+
           {/* Live WhatsApp notification panel */}
           <NotificationPanel notif={notif} col={col} />
 
@@ -814,6 +956,13 @@ export default function App() {
               col={notif ? notifBadgeColor : col + "44"}
               blink={!!(notif && notif.status === "awaiting")}
             />
+            {weather && (
+              <Row
+                label="WEATHER"
+                val={`${weather.temp}° ${weather.condition?.split(" ")[0].toUpperCase()}`}
+                col={weather.temp >= 35 ? "#ff4444" : weather.temp >= 25 ? "#ffaa00" : col}
+              />
+            )}
           </Panel>
         </div>
       </div>
