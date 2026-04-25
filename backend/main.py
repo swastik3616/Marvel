@@ -92,6 +92,19 @@ latest_notification: dict = {
 }
 
 # =========================
+# GMAIL STATE
+# (stores the latest Gmail email notification)
+# =========================
+latest_gmail: dict = {
+    "sender": None,
+    "email": None,
+    "subject": None,
+    "snippet": None,
+    "id": None,
+    "timestamp": None,
+}
+
+# =========================
 # PYDANTIC MODELS
 # =========================
 class NotificationPayload(BaseModel):
@@ -101,6 +114,12 @@ class NotificationPayload(BaseModel):
 
 class ReplyPayload(BaseModel):
     message: str
+
+class GmailPayload(BaseModel):
+    sender: str
+    email: str
+    subject: str
+    snippet: str = ""
 
 # =========================
 # GREETING
@@ -342,6 +361,50 @@ async def get_latest_notification():
     return latest_notification
 
 # =========================
+# GMAIL NOTIFICATION ENDPOINT
+# Called by gmail_listener.py
+# =========================
+@app.post("/gmail-notification")
+async def receive_gmail(payload: GmailPayload):
+    global latest_gmail
+
+    # Deduplication — hash of sender+subject+snippet
+    gmail_id = hashlib.sha256(
+        f"{payload.sender.strip().lower()}|{payload.subject.strip().lower()}|{payload.snippet.strip().lower()[:80]}".encode()
+    ).hexdigest()
+
+    if gmail_id == latest_gmail.get("id"):
+        return {"status": "duplicate", "skipped": True}
+
+    latest_gmail = {
+        "sender":    payload.sender,
+        "email":     payload.email,
+        "subject":   payload.subject,
+        "snippet":   payload.snippet,
+        "id":        gmail_id,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    print(f"[GMAIL] New email from {payload.sender} <{payload.email}>: {payload.subject}")
+
+    # Broadcast to all connected frontend clients
+    await broadcast({
+        "type":      "gmail_notification",
+        "sender":    payload.sender,
+        "email":     payload.email,
+        "subject":   payload.subject,
+        "snippet":   payload.snippet,
+        "timestamp": latest_gmail["timestamp"],
+    })
+
+    return {"status": "ok", "gmail_id": gmail_id}
+
+
+@app.get("/gmail/latest")
+async def get_latest_gmail():
+    return latest_gmail
+
+# =========================
 # WEBSOCKET
 # =========================
 @app.websocket("/ws")
@@ -367,12 +430,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_input = await websocket.receive_text()
                 print(f"[USER] {user_input}")
 
-                # ── Notification command handling ──────────────────────────
+                # ── WhatsApp notification command handling ─────────────────
                 if user_input.startswith("__notification_cmd__"):
                     cmd = user_input[len("__notification_cmd__"):]
 
                     if cmd == "read":
-                        # Speak the stored message
                         msg = latest_notification.get("message")
                         sender = latest_notification.get("sender")
                         if msg and sender:
@@ -389,7 +451,6 @@ async def websocket_endpoint(websocket: WebSocket):
                             })
 
                     elif cmd == "ignore":
-                        # Acknowledge and clear
                         await websocket.send_json({
                             "state": "SPEAKING",
                             "response": "Notification ignored. I'll let it slide.",
@@ -428,7 +489,41 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "response": "What should I reply?",
                             })
                     continue  # don't send notification cmds to AI
-                # ──────────────────────────────────────────────────────────
+                # ─────────────────────────────────────────────────────────────
+
+                # ── Gmail command handling ────────────────────────────────────
+                if user_input.startswith("__gmail_cmd__"):
+                    cmd = user_input[len("__gmail_cmd__"):]
+
+                    if cmd == "read":
+                        subject = latest_gmail.get("subject")
+                        snippet = latest_gmail.get("snippet")
+                        sender  = latest_gmail.get("sender")
+                        if subject and sender:
+                            body = f"Email from {sender}. Subject: {subject}."
+                            if snippet:
+                                body += f" Here's what it says: {snippet}"
+                            await websocket.send_json({
+                                "state": "SPEAKING",
+                                "response": body,
+                                "gmail_action": "read",
+                            })
+                        else:
+                            await websocket.send_json({
+                                "state": "SPEAKING",
+                                "response": "I don't have an email stored right now.",
+                                "gmail_action": "read",
+                            })
+
+                    elif cmd == "ignore":
+                        await websocket.send_json({
+                            "state": "SPEAKING",
+                            "response": "Got it. I'll ignore that email.",
+                            "gmail_action": "ignored",
+                        })
+
+                    continue  # don't send gmail cmds to AI
+                # ─────────────────────────────────────────────────────────────
 
                 await websocket.send_json({
                     "state": "PROCESSING",
@@ -474,5 +569,6 @@ def health():
         "status": "JARVIS online",
         "user": USER_NAME,
         "notification_active": latest_notification.get("sender") is not None,
+        "gmail_active": latest_gmail.get("sender") is not None,
         "weather": current_weather.get("condition", "loading") if current_weather else "loading",
     }

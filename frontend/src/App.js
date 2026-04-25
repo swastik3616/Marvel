@@ -23,6 +23,14 @@ const NOTIF_COLORS = {
   none:     "#ffffff11", // invisible — no notification
 };
 
+// Gmail notification status badge colours
+const GMAIL_COLORS = {
+  awaiting: "#ea4335",   // Gmail red — waiting for command
+  read:     "#34a853",   // Google green — email was read
+  ignored:  "#ffffff33", // faded — ignored
+  none:     "#ffffff11",
+};
+
 // WMO code → simple category for animation
 function weatherCategory(code) {
   if (code === 0 || code === 1) return "clear";
@@ -237,6 +245,100 @@ function NotificationPanel({ notif, col }) {
   );
 }
 
+// ── Gmail Notification Panel ───────────────────────────────────────────────
+function GmailPanel({ gmailNotif, col }) {
+  if (!gmailNotif) {
+    return (
+      <Panel title="Gmail">
+        <div style={{ fontSize: 8, color: "#00e5ff33", lineHeight: 1.6 }}>
+          NO ACTIVE EMAIL
+        </div>
+      </Panel>
+    );
+  }
+
+  const statusColor = GMAIL_COLORS[gmailNotif.status] || GMAIL_COLORS.awaiting;
+  const statusLabel = {
+    awaiting: "AWAITING COMMAND",
+    read:     "EMAIL READ",
+    ignored:  "IGNORED",
+  }[gmailNotif.status] || "PENDING";
+
+  const pulse = gmailNotif.status === "awaiting"
+    ? "notifPulse 1.4s ease-in-out infinite"
+    : "none";
+
+  return (
+    <Panel title="Gmail">
+      {/* Status badge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 5 }}>
+        <div style={{
+          width: 6, height: 6, borderRadius: "50%",
+          background: statusColor,
+          animation: pulse,
+          boxShadow: gmailNotif.status === "awaiting" ? `0 0 8px ${statusColor}` : "none",
+        }} />
+        <span style={{ fontSize: 8, color: statusColor, letterSpacing: 1 }}>
+          {statusLabel}
+        </span>
+      </div>
+
+      {/* Sender */}
+      <div style={{ fontSize: 8, color: "#00e5ff66", marginBottom: 2 }}>FROM</div>
+      <div style={{
+        fontSize: 10, color: "#fff",
+        letterSpacing: 1, marginBottom: 2,
+        textShadow: `0 0 6px ${statusColor}`,
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      }}>
+        {gmailNotif.sender.toUpperCase()}
+      </div>
+      <div style={{ fontSize: 7, color: "#ea433566", marginBottom: 4
+      }}>
+        {gmailNotif.email}
+      </div>
+
+      {/* Subject */}
+      <div style={{ fontSize: 8, color: "#00e5ff66", marginBottom: 2 }}>SUBJECT</div>
+      <div style={{
+        fontSize: 8, color: "#ea4335cc",
+        letterSpacing: 0.5, marginBottom: 4,
+        lineHeight: 1.4, wordBreak: "break-word",
+        maxHeight: 28, overflow: "hidden",
+      }}>
+        {gmailNotif.subject}
+      </div>
+
+      {/* Snippet */}
+      {gmailNotif.snippet && (
+        <>
+          <div style={{ fontSize: 8, color: "#00e5ff66", marginBottom: 2 }}>PREVIEW</div>
+          <div style={{
+            fontSize: 7, color: "#00e5ffaa",
+            lineHeight: 1.5, wordBreak: "break-word",
+            maxHeight: 30, overflow: "hidden",
+          }}>
+            {gmailNotif.snippet.length > 80
+              ? gmailNotif.snippet.substring(0, 80) + "…"
+              : gmailNotif.snippet}
+          </div>
+        </>
+      )}
+
+      {/* Commands hint */}
+      {gmailNotif.status === "awaiting" && (
+        <div style={{
+          marginTop: 5, fontSize: 7, color: "#ea433588",
+          borderTop: "1px solid #ea433522", paddingTop: 4,
+          lineHeight: 1.7,
+        }}>
+          SAY: "READ IT" / "IGNORE"
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState("IDLE");
   const [userText, setUserText] = useState("");
@@ -256,6 +358,11 @@ export default function App() {
   // { sender, message, status: "awaiting"|"read"|"replied"|"ignored" }
   const [notif, setNotif] = useState(null);
   const notifRef = useRef(null);  // mirror for closures
+
+  // ── Gmail state ──────────────────────────────────────────────────────────
+  // { sender, email, subject, snippet, status: "awaiting"|"read"|"ignored" }
+  const [gmailNotif, setGmailNotif] = useState(null);
+  const gmailNotifRef = useRef(null);
 
   const radarRef = useRef(null);
   const waveRef = useRef(null);
@@ -420,6 +527,45 @@ export default function App() {
     return false; // not a notification command — pass to AI
   }).current;
 
+  // ── Gmail command dispatcher ─────────────────────────────────
+  const handleGmailCommand = useRef((rawText, ws) => {
+    const text = rawText.toLowerCase().trim();
+    const currentGmail = gmailNotifRef.current;
+
+    if (!currentGmail || currentGmail.status !== "awaiting") return false;
+
+    // "read it" / "read" / "yes"
+    // But only if WhatsApp notif is NOT also awaiting (WhatsApp takes priority)
+    if (!notifRef.current || notifRef.current.status !== "awaiting") {
+      if (text === "yes" || text === "read it" || text === "read" || text === "read the email" || text === "read the message") {
+        ws.send("__gmail_cmd__read");
+        setGmailNotif(n => ({ ...n, status: "read" }));
+        gmailNotifRef.current = { ...currentGmail, status: "read" };
+        addLog("GMAIL: READ CMD");
+        setTimeout(() => {
+          setGmailNotif(null);
+          gmailNotifRef.current = null;
+        }, 6000);
+        return true;
+      }
+
+      // "ignore" / "no" / "skip"
+      if (text === "ignore" || text === "no" || text === "skip" || text === "dismiss") {
+        ws.send("__gmail_cmd__ignore");
+        setGmailNotif(n => ({ ...n, status: "ignored" }));
+        gmailNotifRef.current = { ...currentGmail, status: "ignored" };
+        addLog("GMAIL: IGNORED");
+        setTimeout(() => {
+          setGmailNotif(null);
+          gmailNotifRef.current = null;
+        }, 3000);
+        return true;
+      }
+    }
+
+    return false;
+  }).current;
+
   // ── Speech recognition ───────────────────────────────────────
   const startListening = useRef((ws) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -453,10 +599,13 @@ export default function App() {
         setUserText(rawText);
         setGreeting("");
 
-        // ── Notification command intercept (highest priority) ──
+        // ── WhatsApp notification command intercept (highest priority) ──
         if (handleNotifCommand(rawText, ws)) return;
 
-        // ── Standard JARVIS wake word ──────────────────────────
+        // ── Gmail command intercept (second priority) ─────────────────
+        if (handleGmailCommand(rawText, ws)) return;
+
+        // ── Standard JARVIS wake word ─────────────────────────────────
         if (text.includes("jarvis")) {
           if (ws.readyState === WebSocket.OPEN) {
             stateRef.current = "PROCESSING";
@@ -539,7 +688,7 @@ export default function App() {
         if (!isMounted) return;
         const data = JSON.parse(e.data);
 
-        // ── WhatsApp notification broadcast ───────────────────
+        // ── WhatsApp notification broadcast ────────────────────────
         if (data.type === "whatsapp_notification") {
           const newNotif = {
             sender: data.sender,
@@ -557,7 +706,27 @@ export default function App() {
           return;
         }
 
-        // ── Notification action responses ─────────────────────
+        // ── Gmail broadcast ────────────────────────────────────────
+        if (data.type === "gmail_notification") {
+          const newGmail = {
+            sender:  data.sender,
+            email:   data.email,
+            subject: data.subject,
+            snippet: data.snippet,
+            status:  "awaiting",
+            timestamp: data.timestamp,
+          };
+          setGmailNotif(newGmail);
+          gmailNotifRef.current = newGmail;
+
+          const alertText = `Swastik, you have an email from ${data.sender}. Subject: ${data.subject}. Should I read it?`;
+          setResponse(alertText);
+          addLog(`GMAIL: ${data.sender}`);
+          speak(alertText);
+          return;
+        }
+
+        // ── Notification action responses ──────────────────────────
         if (data.notification_action) {
           const action = data.notification_action;
           if (data.response) {
@@ -577,6 +746,29 @@ export default function App() {
             }, 4000);
           }
           addLog(`NOTIF ACT: ${action.toUpperCase()}`);
+          return;
+        }
+
+        // ── Gmail action responses ─────────────────────────────────
+        if (data.gmail_action) {
+          const action = data.gmail_action;
+          if (data.response) {
+            setResponse(data.response);
+            speak(data.response);
+          }
+          if (action === "ignored") {
+            setTimeout(() => {
+              setGmailNotif(null);
+              gmailNotifRef.current = null;
+            }, 3000);
+          }
+          if (action === "read") {
+            setTimeout(() => {
+              setGmailNotif(null);
+              gmailNotifRef.current = null;
+            }, 8000);
+          }
+          addLog(`GMAIL ACT: ${action.toUpperCase()}`);
           return;
         }
 
@@ -752,14 +944,21 @@ export default function App() {
     ? `JARVIS: ${greeting}`
     : notif && notif.status === "awaiting" && state !== "SPEAKING"
       ? `⚡ MSG FROM ${notif.sender.toUpperCase()} — SAY "READ IT" OR "IGNORE"`
-      : userText
-        ? `YOU: ${userText.toUpperCase()}`
-        : state === "SPEAKING" ? "JARVIS IS SPEAKING..."
-          : "SAY 'JARVIS' TO ACTIVATE";
+      : gmailNotif && gmailNotif.status === "awaiting" && state !== "SPEAKING"
+        ? `📧 EMAIL FROM ${gmailNotif.sender.toUpperCase()} — SAY "READ IT" OR "IGNORE"`
+        : userText
+          ? `YOU: ${userText.toUpperCase()}`
+          : state === "SPEAKING" ? "JARVIS IS SPEAKING..."
+            : "SAY 'JARVIS' TO ACTIVATE";
 
   // Determine notification indicator color for the top-right corner badge
   const notifBadgeColor = notif
     ? (notif.status === "awaiting" ? "#ff9900" : notif.status === "replied" ? "#00e5ff" : "#00ff88")
+    : "transparent";
+
+  // Determine Gmail indicator color for badge
+  const gmailBadgeColor = gmailNotif
+    ? (gmailNotif.status === "awaiting" ? "#ea4335" : "#34a853")
     : "transparent";
 
   return (
@@ -812,6 +1011,18 @@ export default function App() {
             background: "#ff9900",
             animation: "notifPulse 1.4s ease-in-out infinite",
             boxShadow: "0 0 10px #ff9900",
+            zIndex: 20,
+          }} />
+        )}
+
+        {/* Gmail active notification blinking dot — top-right (offset) */}
+        {gmailNotif && gmailNotif.status === "awaiting" && (
+          <div style={{
+            position: "absolute", top: 22, right: 38,
+            width: 8, height: 8, borderRadius: "50%",
+            background: "#ea4335",
+            animation: "notifPulse 1.4s ease-in-out infinite",
+            boxShadow: "0 0 10px #ea4335",
             zIndex: 20,
           }} />
         )}
@@ -926,6 +1137,9 @@ export default function App() {
           {/* Live WhatsApp notification panel */}
           <NotificationPanel notif={notif} col={col} />
 
+          {/* Live Gmail notification panel */}
+          <GmailPanel gmailNotif={gmailNotif} col={col} />
+
           <Panel title="Response">
             <div style={{ fontSize: 8, color: "#00e5ffcc", lineHeight: 1.5, minHeight: 50 }}>
               {response.substring(0, 140)}{response.length > 140 ? "..." : ""}
@@ -955,6 +1169,12 @@ export default function App() {
               val={notif ? (notif.status === "awaiting" ? "PENDING ●" : notif.status.toUpperCase()) : "IDLE"}
               col={notif ? notifBadgeColor : col + "44"}
               blink={!!(notif && notif.status === "awaiting")}
+            />
+            <Row
+              label="GMAIL"
+              val={gmailNotif ? (gmailNotif.status === "awaiting" ? "PENDING ●" : gmailNotif.status.toUpperCase()) : "IDLE"}
+              col={gmailNotif ? gmailBadgeColor : col + "44"}
+              blink={!!(gmailNotif && gmailNotif.status === "awaiting")}
             />
             {weather && (
               <Row
