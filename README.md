@@ -118,7 +118,7 @@ npm start
 1. **Wake & Listen:** The frontend connects to the backend via WebSockets. It constantly listens for the wake word using localized native speech recognition.
 2. **AI Inference & Streaming:** Once triggered, the voice query is resolved and routed to the Groq API. The response is streamed token-by-token back to the React UI, instantly animating the visualizer.
 3. **Deep OS Hooks:** In the background, `notification_listener.py` hooks directly into the Windows Notification service. When a WhatsApp message arrives, it intercepts the toast notification, deduplicates it, and relays it to the frontend via the WebSocket connection.
-4. **Seamless Automation:** If the user opts to "Reply," `whatsapp_reply.py` automatically pinpoints the chat window and relays the dictated text via secure OS-level macro commands.
+4. **Seamless Automation:** If the user opts to "Reply," `whatsapp_reply.py`, `gmail_reply` automatically pinpoints the chat window and relays the dictated text via secure OS-level macro commands.
 
 ---
 
