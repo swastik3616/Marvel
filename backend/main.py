@@ -11,6 +11,9 @@ import requests
 import os
 import asyncio
 import hashlib
+import psutil
+import reminders
+import spotify
 from location import get_geolocation
 from weather import fetch_weather, weather_summary
 
@@ -45,8 +48,14 @@ async def startup_event():
     global current_location
     current_location = await asyncio.to_thread(get_geolocation)
     print(f"[JARVIS] Startup complete. Location: {current_location}")
+    
     # Start weather refresh loop
     asyncio.create_task(weather_refresh_loop())
+    
+    # Start reminders loop
+    reminders.set_broadcast(broadcast)
+    asyncio.create_task(reminders.reminder_loop())
+    print("[REMINDERS] Loop started")
 
 async def weather_refresh_loop():
     global current_weather
@@ -405,6 +414,36 @@ async def get_latest_gmail():
     return latest_gmail
 
 # =========================
+# REMINDERS ENDPOINTS
+# =========================
+class ReminderRequest(BaseModel):
+    label: str
+    seconds: int
+
+@app.post("/reminder")
+async def create_reminder(req: ReminderRequest):
+    r = reminders.add_reminder(req.label, req.seconds)
+    return {"status": "ok", "reminder": r}
+
+@app.get("/reminders")
+async def list_reminders():
+    return reminders.get_active_reminders()
+
+# =========================
+# SPOTIFY ENDPOINTS
+# =========================
+@app.get("/spotify/track")
+async def get_spotify_track():
+    track = spotify.get_current_track()
+    if track: return track
+    return {"status": "no track"}
+
+@app.post("/spotify/control")
+async def spotify_control(command: str):
+    result = spotify.spotify_command(command)
+    return result
+
+# =========================
 # WEBSOCKET
 # =========================
 @app.websocket("/ws")
@@ -525,6 +564,26 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue  # don't send gmail cmds to AI
                 # ─────────────────────────────────────────────────────────────
 
+                # ── Reminder command handling ─────────────────────────────────
+                if user_input.startswith("__reminder_cmd__"):
+                    cmd = user_input[len("__reminder_cmd__"):]
+                    # For now, just a dummy handler if needed
+                    if cmd == "dismiss":
+                        await websocket.send_json({
+                            "state": "IDLE",
+                            "response": "Reminder dismissed.",
+                            "reminder_action": "dismissed"
+                        })
+                    continue
+                # ─────────────────────────────────────────────────────────────
+
+                # ── Spotify command handling ──────────────────────────────────
+                if user_input.startswith("__spotify_cmd__"):
+                    cmd = user_input[len("__spotify_cmd__"):]
+                    spotify.spotify_command(cmd)
+                    continue
+                # ─────────────────────────────────────────────────────────────
+
                 await websocket.send_json({
                     "state": "PROCESSING",
                     "user": user_input
@@ -546,6 +605,40 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[FATAL ERROR] {e}")
     finally:
         connected_clients.discard(websocket)
+
+# =========================
+# SYSTEM STATS ENDPOINT
+# =========================
+@app.get("/system-stats")
+async def get_system_stats():
+    try:
+        # CPU
+        cpu_usage = psutil.cpu_percent(interval=None)
+        
+        # RAM
+        ram = psutil.virtual_memory()
+        ram_usage = ram.percent
+        
+        # Battery (if available)
+        battery = psutil.sensors_battery()
+        battery_percent = battery.percent if battery else 100
+        is_charging = battery.power_plugged if battery else True
+        
+        # Disk
+        disk = psutil.disk_usage('/')
+        disk_usage = disk.percent
+        
+        return {
+            "cpu": cpu_usage,
+            "ram": ram_usage,
+            "battery": battery_percent,
+            "charging": is_charging,
+            "disk": disk_usage,
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        print(f"[SYSTEM] Error fetching stats: {e}")
+        return {"error": str(e)}
 
 # =========================
 # WEATHER ENDPOINT

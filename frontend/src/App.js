@@ -339,6 +339,101 @@ function GmailPanel({ gmailNotif, col }) {
   );
 }
 
+// ── System Stats Panel ────────────────────────────────────────────────────────
+function SystemStatsPanel({ stats, col }) {
+  if (!stats) return (
+    <Panel title="System Stats">
+      <div style={{ fontSize: 8, color: "#00e5ff33" }}>LOADING...</div>
+    </Panel>
+  );
+
+  return (
+    <Panel title="System Stats">
+      <BarRow label="CPU" val={Math.round(stats.cpu)} col={col} />
+      <BarRow label="RAM" val={Math.round(stats.ram)} col={col} />
+      <BarRow label="DSK" val={Math.round(stats.disk)} col={col} />
+      <div style={{ marginTop: 4 }}>
+        <Row 
+          label="BATT" 
+          val={`${stats.battery}% ${stats.charging ? "(CHARGING)" : ""}`} 
+          col={stats.battery < 20 ? "#ff4444" : col} 
+        />
+      </div>
+    </Panel>
+  );
+}
+
+// ── Reminders Panel ───────────────────────────────────────────────────────────
+function RemindersPanel({ reminders, col }) {
+  if (!reminders || reminders.length === 0) {
+    return (
+      <Panel title="Reminders">
+        <div style={{ fontSize: 8, color: "#00e5ff33" }}>NO ACTIVE REMINDERS</div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="Reminders">
+      {reminders.map(r => (
+        <div key={r.id} style={{ marginBottom: 6, borderBottom: "1px solid #00e5ff11", paddingBottom: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9 }}>
+            <span style={{ color: "#fff" }}>{r.label.toUpperCase()}</span>
+            <span style={{ color: col }}>{r.seconds_left}s</span>
+          </div>
+          <div style={{ height: 2, background: "#00e5ff22", marginTop: 2 }}>
+            <div style={{ 
+              width: `${Math.max(0, Math.min(100, (r.seconds_left / 60) * 100))}%`, 
+              height: "100%", background: col, transition: "width 1s linear" 
+            }} />
+          </div>
+        </div>
+      ))}
+    </Panel>
+  );
+}
+
+// ── Spotify Panel ─────────────────────────────────────────────────────────────
+function SpotifyPanel({ track, col }) {
+  if (!track || track.status === "no track") {
+    return (
+      <Panel title="Spotify">
+        <div style={{ fontSize: 8, color: "#00e5ff33" }}>NO TRACK PLAYING</div>
+      </Panel>
+    );
+  }
+
+  const progress = (track.progress_ms / track.duration_ms) * 100;
+
+  return (
+    <Panel title="Spotify">
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {track.album_art && (
+          <img src={track.album_art} alt="art" style={{ width: 32, height: 32, border: "1px solid #00e5ff44" }} />
+        )}
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <div style={{ fontSize: 9, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {track.name.toUpperCase()}
+          </div>
+          <div style={{ fontSize: 7, color: col, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {track.artist.toUpperCase()}
+          </div>
+        </div>
+      </div>
+      <div style={{ height: 2, background: "#00e5ff22", marginTop: 6, position: "relative" }}>
+        <div style={{ width: `${progress}%`, height: "100%", background: col }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 6, color: "#00e5ff44", marginTop: 2 }}>
+        <span>{Math.floor(track.progress_ms / 60000)}:{String(Math.floor((track.progress_ms % 60000) / 1000)).padStart(2, '0')}</span>
+        <span>{Math.floor(track.duration_ms / 60000)}:{String(Math.floor((track.duration_ms % 60000) / 1000)).padStart(2, '0')}</span>
+      </div>
+      <div style={{ fontSize: 7, color: track.is_playing ? col : "#ff4444", marginTop: 4, letterSpacing: 1 }}>
+        {track.is_playing ? "▶ PLAYING" : "‖ PAUSED"}
+      </div>
+    </Panel>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState("IDLE");
   const [userText, setUserText] = useState("");
@@ -363,6 +458,15 @@ export default function App() {
   // { sender, email, subject, snippet, status: "awaiting"|"read"|"ignored" }
   const [gmailNotif, setGmailNotif] = useState(null);
   const gmailNotifRef = useRef(null);
+
+  // ── System Stats state ────────────────────────────────────────────────────
+  const [systemStats, setSystemStats] = useState(null);
+
+  // ── Reminders state ───────────────────────────────────────────────────────
+  const [activeReminders, setActiveReminders] = useState([]);
+
+  // ── Spotify state ─────────────────────────────────────────────────────────
+  const [spotifyTrack, setSpotifyTrack] = useState(null);
 
   const radarRef = useRef(null);
   const waveRef = useRef(null);
@@ -419,6 +523,60 @@ export default function App() {
     fetchWeather();
     weatherIntervalRef.current = setInterval(fetchWeather, 600_000);
     return () => clearInterval(weatherIntervalRef.current);
+  }, []);
+
+  // ── System Stats fetch ───────────────────────────────────────
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/system-stats");
+        if (res.ok) {
+          const data = await res.json();
+          setSystemStats(data);
+        }
+      } catch (e) {
+        console.warn("Stats fetch failed:", e);
+      }
+    };
+    fetchStats();
+    const id = setInterval(fetchStats, 5000); // every 5s
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Reminders fetch ──────────────────────────────────────────
+  useEffect(() => {
+    const fetchReminders = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/reminders");
+        if (res.ok) {
+          const data = await res.json();
+          setActiveReminders(data);
+        }
+      } catch (e) {
+        console.warn("Reminders fetch failed:", e);
+      }
+    };
+    fetchReminders();
+    const id = setInterval(fetchReminders, 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Spotify fetch ────────────────────────────────────────────
+  useEffect(() => {
+    const fetchSpotify = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/spotify/track");
+        if (res.ok) {
+          const data = await res.json();
+          setSpotifyTrack(data);
+        }
+      } catch (e) {
+        // console.warn("Spotify fetch failed:", e);
+      }
+    };
+    fetchSpotify();
+    const id = setInterval(fetchSpotify, 3000);
+    return () => clearInterval(id);
   }, []);
 
   // ── All stable callbacks via refs ───────────────────────────
@@ -607,6 +765,57 @@ export default function App() {
 
         // ── Standard JARVIS wake word ─────────────────────────────────
         if (text.includes("jarvis")) {
+          // Intent Detection: Reminders
+          if (text.includes("remind me to")) {
+            const match = rawText.match(/remind me to (.*) in (\d+) (second|seconds|minute|minutes|hour|hours)/i);
+            if (match) {
+              const label = match[1];
+              let seconds = parseInt(match[2]);
+              const unit = match[3].toLowerCase();
+              if (unit.startsWith("minute")) seconds *= 60;
+              if (unit.startsWith("hour"))   seconds *= 3600;
+
+              fetch("http://localhost:8000/reminder", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ label, seconds })
+              }).then(() => {
+                speak(`Certainly Swastik. I'll remind you to ${label} in ${match[2]} ${unit}.`);
+                addLog(`REMINDER SET: ${label}`);
+              });
+              return;
+            }
+          }
+
+          // Intent Detection: Spotify
+          const lowerText = text.toLowerCase();
+          if (lowerText.includes("spotify") || lowerText.includes("music") || lowerText.includes("song")) {
+            if (lowerText.includes("play") || lowerText.includes("resume")) {
+              ws.send("__spotify_cmd__play");
+              speak("Resuming playback on Spotify.");
+              addLog("SPOTIFY: PLAY");
+              return;
+            }
+            if (lowerText.includes("pause") || lowerText.includes("stop")) {
+              ws.send("__spotify_cmd__pause");
+              speak("Spotify playback paused.");
+              addLog("SPOTIFY: PAUSE");
+              return;
+            }
+            if (lowerText.includes("next") || lowerText.includes("skip")) {
+              ws.send("__spotify_cmd__next");
+              speak("Skipping to the next track.");
+              addLog("SPOTIFY: NEXT");
+              return;
+            }
+            if (lowerText.includes("previous") || lowerText.includes("back")) {
+              ws.send("__spotify_cmd__previous");
+              speak("Going back to the previous track.");
+              addLog("SPOTIFY: PREVIOUS");
+              return;
+            }
+          }
+
           if (ws.readyState === WebSocket.OPEN) {
             stateRef.current = "PROCESSING";
             setState("PROCESSING");
@@ -791,6 +1000,15 @@ export default function App() {
           setResponse(data.response);
           addLog("JARVIS REPLIED");
           speak(data.response);
+        }
+
+        // ── Reminder firing ────────────────────────────────────────
+        if (data.type === "reminder") {
+          const alertText = `Swastik, your reminder for ${data.label} is firing.`;
+          setResponse(alertText);
+          speak(alertText);
+          addLog(`REMINDER: ${data.label.toUpperCase()}`);
+          return;
         }
 
         if (data.user) {
@@ -1139,6 +1357,12 @@ export default function App() {
 
           {/* Live Gmail notification panel */}
           <GmailPanel gmailNotif={gmailNotif} col={col} />
+
+          {/* Live Reminders panel */}
+          <RemindersPanel reminders={activeReminders} col={col} />
+
+          {/* Spotify panel */}
+          <SpotifyPanel track={spotifyTrack} col={col} />
 
           <Panel title="Response">
             <div style={{ fontSize: 8, color: "#00e5ffcc", lineHeight: 1.5, minHeight: 50 }}>

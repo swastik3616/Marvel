@@ -18,3 +18,4 @@ winrt-Windows.System
 winrt-Windows.ApplicationModel.DataTransfer
 pyperclip
 requests
+spotipy
