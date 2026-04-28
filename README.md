@@ -24,6 +24,9 @@ J.A.R.V.I.S. is a next-generation desktop AI assistant built with a modern web s
 - 🗣️ **Local Voice Processing**: Fast, high-accuracy speech-to-text using `SpeechRecognition` and `Faster Whisper`, combined with real-time text-to-speech generation via `pyttsx3`.
 - ⚡ **Streaming WebSockets**: Low-latency, bidirectional WebSocket connection ensures the UI remains responsive, streaming LLM tokens live as they are generated.
 - 🌍 **Personalized Context & Awareness**: Time-aware greetings, timezone tracking, and dynamic geolocation awareness built right in.
+- 📊 **Real-Time System Monitoring**: Live tracking of CPU, RAM, Disk, and Battery levels directly from the dashboard.
+- 🔔 **Voice-Activated Reminders**: Set, track, and receive voice notifications for reminders using simple natural language.
+- 🎵 **Spotify Control**: Full playback control and live track metadata integration for a seamless musical experience.
 
 ---
 
@@ -38,7 +41,8 @@ J.A.R.V.I.S. is a next-generation desktop AI assistant built with a modern web s
 - **Core Server:** FastAPI & Uvicorn (Asynchronous Python)
 - **Communication:** WebSockets
 - **AI / LLM:** Groq API (via `openai` Python client)
-- **OS Integration:** Python-WinRT (Windows 10/11 Toast Notifications), PyAutoGUI, Pyperclip
+- **OS Integration:** Python-WinRT (Windows 10/11 Toast Notifications), PyAutoGUI, Pyperclip, psutil (System Stats)
+- **Third-Party APIs:** Groq (LLM), Spotify Web API (via spotipy)
 - **Audio Processing:** Faster Whisper, SpeechRecognition, Pyttsx3
 
 ---
@@ -54,6 +58,9 @@ J.A.R.V.I.S. is a next-generation desktop AI assistant built with a modern web s
 │   ├── whatsapp_reply.py          # OS-level automated WhatsApp reply logic
 │   ├── voice.py                   # Speech-to-text and voice command handling
 │   ├── location.py                # Geolocation fetcher
+│   ├── weather.py                 # Live weather data engine
+│   ├── reminders.py               # Background reminder management
+│   ├── spotify.py                 # Spotify API integration
 │   ├── tts.py                     # Text-to-speech engine wrapper
 │   └── requirements.txt           # Python dependencies
 │
@@ -90,6 +97,9 @@ pip install -r requirements.txt
 Create a `.env` file in the `backend/` directory and configure your Groq API Key:
 ```ini
 GROQ_API_KEY=your_groq_api_key_here
+SPOTIPY_CLIENT_ID=your_spotify_client_id
+SPOTIPY_CLIENT_SECRET=your_spotify_client_secret
+SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
 ```
 
 Start the backend API server:
@@ -125,7 +135,8 @@ npm start
 ## 🗺️ Roadmap
 
 - [ ] Add explicit local LLM fallback support (e.g., Ollama or Llama.cpp) when internet is unavailable.
-- [ ] Expand desktop integrations (Spotify controls, Outlook Calendar syncing).
+- [x] Expand desktop integrations (Spotify controls).
+- [ ] Add Outlook Calendar syncing.
 - [ ] Improve continuous conversation multi-turn mode without requiring the wake word every time.
 - [ ] Mac/Linux support for basic interaction (excluding WinRT-specific modules).
 
