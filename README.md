@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://img.shields.io/badge/JARVIS-AI%20Assistant-00e5ff?style=for-the-badge&logo=openai" alt="JARVIS AI" />
   <h1>J.A.R.V.I.S. AI Assistant</h1>
-  <p><i>A powerful, voice-activated desktop AI assistant inspired by Iron Man's J.A.R.V.I.S.</i></p>
+  <p><i>"The most advanced voice-activated desktop AI assistant, inspired by Stark Industries."</i></p>
 
   [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
   [![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -10,40 +10,36 @@
   [![Electron](https://img.shields.io/badge/Electron-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 </div>
 
-<br />
-
-J.A.R.V.I.S. is a next-generation desktop AI assistant built with a modern web stack and a high-performance Python backend. It features **real-time voice streaming**, **conversational memory**, and **deep native Windows integration**, allowing you to interact seamlessly with your desktop applications like WhatsApp directly through voice.
-
 ---
+
+J.A.R.V.I.S. (Just A Rather Very Intelligent System) is a state-of-the-art desktop AI assistant. Built with a high-performance Python backend and a futuristic Electron + React frontend, it offers real-time voice interaction, deep Windows integration, and a sophisticated command center for your digital life.
 
 ## ✨ Key Features
 
-- 🧠 **Lightning-Fast Conversational AI**: Powered by **Groq's LLaMA 3.1 8B**, delivering instant, intelligent responses.
-- 🎙️ **Real-Time Voice UI**: A sleek, modern **Electron + React** frontend featuring dynamic Framer Motion animations that visualize processing, listening, and speaking states.
-- 💬 **Native WhatsApp Integration**: Utilizes Windows Runtime (WinRT) to intercept incoming WhatsApp desktop notifications, read them aloud, and use intelligent automation to reply seamlessly without lifting a finger.
-- 🗣️ **Local Voice Processing**: Fast, high-accuracy speech-to-text using `SpeechRecognition` and `Faster Whisper`, combined with real-time text-to-speech generation via `pyttsx3`.
-- ⚡ **Streaming WebSockets**: Low-latency, bidirectional WebSocket connection ensures the UI remains responsive, streaming LLM tokens live as they are generated.
-- 🌍 **Personalized Context & Awareness**: Time-aware greetings, timezone tracking, and dynamic geolocation awareness built right in.
-- 📊 **Real-Time System Monitoring**: Live tracking of CPU, RAM, Disk, and Battery levels directly from the dashboard.
-- 🔔 **Voice-Activated Reminders**: Set, track, and receive voice notifications for reminders using simple natural language.
-- 🎵 **Spotify Control**: Full playback control and live track metadata integration for a seamless musical experience.
+- 🧠 **LLaMA 3.1 Powered Intelligence**: Lightning-fast responses via Groq's high-speed inference engine.
+- 🎙️ **Holographic Voice UI**: A stunning dashboard with dynamic visualizations that react to your voice.
+- 💬 **Native WhatsApp Integration**: Intercepts, reads, and replies to WhatsApp messages via voice and automated OS macros.
+- 📧 **Gmail Monitoring**: Real-time email notifications with voice-based "Read/Ignore" capabilities.
+- 📊 **System Insight**: Live telemetry of your PC’s CPU, RAM, Disk, and Battery health.
+- 🔔 **Voice Reminders**: Set time-based alerts using natural language (e.g., *"Remind me to check the oven in 10 minutes"*).
+- 🎵 **Spotify Dashboard**: Integrated music control with live track metadata and playback synchronization.
+- 🌍 **Context Aware**: Automatic timezone, location, and weather updates.
 
 ---
 
-## 🏗️ Architecture & Tech Stack
+## 🏗️ Tech Stack
 
-### Frontend (Desktop Client)
+### Frontend
 - **Frameworks:** Electron, React 18
-- **Styling & UI:** TailwindCSS, Vanilla CSS, Canvas API (for performance-critical data visualizations)
-- **Animations:** Framer Motion
+- **Styling:** Vanilla CSS (Glassmorphism), Framer Motion
+- **Visuals:** HTML5 Canvas API (Orb & Wave visualizers)
 
-### Backend (AI Engine & OS Integrations)
-- **Core Server:** FastAPI & Uvicorn (Asynchronous Python)
-- **Communication:** WebSockets
-- **AI / LLM:** Groq API (via `openai` Python client)
-- **OS Integration:** Python-WinRT (Windows 10/11 Toast Notifications), PyAutoGUI, Pyperclip, psutil (System Stats)
-- **Third-Party APIs:** Groq (LLM), Spotify Web API (via spotipy)
-- **Audio Processing:** Faster Whisper, SpeechRecognition, Pyttsx3
+### Backend
+- **Server:** FastAPI (Asynchronous Python 3.10+)
+- **AI/LLM:** Groq LLaMA 3.1 8B / 70B
+- **Automation:** Python-WinRT, PyAutoGUI, Pyperclip
+- **Hardware Stats:** psutil
+- **Audio:** Faster Whisper (STT), pyttsx3 (TTS), SpeechRecognition
 
 ---
 
@@ -52,96 +48,72 @@ J.A.R.V.I.S. is a next-generation desktop AI assistant built with a modern web s
 ```text
 .
 ├── backend/
-│   ├── main.py                    # Core FastAPI server and WebSocket handler
-│   ├── ai_engine.py               # Groq LLM integration logic
-│   ├── notification_listener.py   # WinRT WhatsApp toast notification interceptor
-│   ├── whatsapp_reply.py          # OS-level automated WhatsApp reply logic
-│   ├── voice.py                   # Speech-to-text and voice command handling
-│   ├── location.py                # Geolocation fetcher
-│   ├── weather.py                 # Live weather data engine
-│   ├── reminders.py               # Background reminder management
-│   ├── spotify.py                 # Spotify API integration
-│   ├── tts.py                     # Text-to-speech engine wrapper
-│   └── requirements.txt           # Python dependencies
+│   ├── main.py                    # FastAPI server & WebSocket orchestration
+│   ├── ai_engine.py               # LLM integration & memory management
+│   ├── reminders.py               # Background timer & notification loop
+│   ├── spotify.py                 # Spotify Web API playback controls
+│   ├── notification_listener.py   # WinRT Toast notification interceptor
+│   ├── whatsapp_reply.py          # OS-level automated messaging logic
+│   ├── voice.py                   # Speech-to-text pipeline
+│   ├── weather.py                 # Real-time meteorological data
+│   └── location.py                # Geolocation services
 │
 └── frontend/
-    ├── electron.js                  # Electron main process entry point
-    ├── src/                         # React UI components (Dashboard, Visualizers)
-    ├── tailwind.config.js           # Tailwind UI configurations
-    └── package.json                 # Node dependencies
+    ├── electron.js                  # Desktop container entry point
+    └── src/                         # React Application (Dashboard & Panels)
 ```
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Installation & Setup
 
-### Prerequisites
+### 1. Backend Configuration
+1. Navigate to `backend/` and create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # venv\Scripts\activate on Windows
+   pip install -r requirements.txt
+   ```
+2. Configure your `.env` file:
+   ```ini
+   GROQ_API_KEY=your_key_here
+   SPOTIPY_CLIENT_ID=your_spotify_id
+   SPOTIPY_CLIENT_SECRET=your_spotify_secret
+   SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
+   ```
+3. Launch the server:
+   ```bash
+   uvicorn main:app --reload
+   ```
 
-To run this application locally, you'll need the following installed:
-- **Node.js** (v18 or higher)
-- **Python** (3.10 or higher)
-- **Windows 10/11** (Required for WinRT native notification features)
-- **Groq API Key** (Get one at [Groq's Console](https://console.groq.com/))
-
-### 1. Backend Setup
-
-Open a terminal and navigate to the `backend/` directory:
-
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Create a `.env` file in the `backend/` directory and configure your Groq API Key:
-```ini
-GROQ_API_KEY=your_groq_api_key_here
-SPOTIPY_CLIENT_ID=your_spotify_client_id
-SPOTIPY_CLIENT_SECRET=your_spotify_client_secret
-SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
-```
-
-Start the backend API server:
-```bash
-uvicorn main:app --reload
-```
-
-### 2. Frontend Setup
-
-Open a new terminal window and navigate to the `frontend/` directory:
-
-```bash
-cd frontend
-npm install
-```
-
-Start the Electron React application:
-```bash
-npm start
-```
+### 2. Frontend Launch
+1. Navigate to `frontend/`:
+   ```bash
+   npm install
+   npm start
+   ```
 
 ---
 
-## 🧠 How It Works
+## 🗣️ Voice Commands
 
-1. **Wake & Listen:** The frontend connects to the backend via WebSockets. It constantly listens for the wake word using localized native speech recognition.
-2. **AI Inference & Streaming:** Once triggered, the voice query is resolved and routed to the Groq API. The response is streamed token-by-token back to the React UI, instantly animating the visualizer.
-3. **Deep OS Hooks:** In the background, `notification_listener.py` hooks directly into the Windows Notification service. When a WhatsApp message arrives, it intercepts the toast notification, deduplicates it, and relays it to the frontend via the WebSocket connection.
-4. **Seamless Automation:** If the user opts to "Reply," `whatsapp_reply.py` automatically pinpoints the chat window and relays the dictated text via secure OS-level macro commands.
-
----
-
-## 🗺️ Roadmap
-
-- [ ] Add explicit local LLM fallback support (e.g., Ollama or Llama.cpp) when internet is unavailable.
-- [x] Expand desktop integrations (Spotify controls).
-- [ ] Add Outlook Calendar syncing.
-- [ ] Improve continuous conversation multi-turn mode without requiring the wake word every time.
-- [ ] Mac/Linux support for basic interaction (excluding WinRT-specific modules).
+| Feature | Commands |
+| :--- | :--- |
+| **Assistant** | *"Hey Jarvis..."*, *"Are you there?"* |
+| **WhatsApp** | *"Read it"*, *"Ignore"*, *"Reply [message]"* |
+| **Gmail** | *"Read the email"*, *"Dismiss"* |
+| **Reminders** | *"Remind me to [task] in [X] minutes/seconds"* |
+| **Spotify** | *"Play music"*, *"Pause"*, *"Next song"*, *"Previous"* |
+| **Weather** | *"What's the weather like?"*, *"Is it raining?"* |
 
 ---
+
+## 🗺️ Roadmap & Future
+- [ ] **Local LLM Support**: Support for Ollama/Llama.cpp fallbacks.
+- [ ] **Calendar Integration**: Outlook & Google Calendar sync.
+- [ ] **Multi-Turn Voice**: Continuous conversation without repeating the wake word.
+- [ ] **Cross-Platform**: Expansion to macOS and Linux.
 
 <div align="center">
-  <p>Built with ❤️ by Swastik</p>
+  <p>Built with ❤️ by <b>Swastik</b></p>
 </div>
