@@ -16,6 +16,7 @@ import reminders
 import spotify
 from location import get_geolocation
 from weather import fetch_weather, weather_summary
+import calendar_events
 
 # =========================
 # SETUP
@@ -129,6 +130,11 @@ class GmailPayload(BaseModel):
     email: str
     subject: str
     snippet: str = ""
+
+class MeetingRequest(BaseModel):
+    title: str
+    date: str
+    time: str
 
 # =========================
 # GREETING
@@ -442,6 +448,18 @@ async def get_spotify_track():
 async def spotify_control(command: str):
     result = spotify.spotify_command(command)
     return result
+
+# =========================
+# CALENDAR ENDPOINTS
+# =========================
+@app.post("/meeting")
+async def create_meeting(req: MeetingRequest):
+    event = calendar_events.add_event(req.title, req.date, req.time)
+    return {"status": "ok", "event": event}
+
+@app.get("/meetings")
+async def list_meetings():
+    return calendar_events.get_upcoming_events()
 
 # =========================
 # WEBSOCKET

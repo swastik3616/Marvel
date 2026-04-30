@@ -434,6 +434,30 @@ function SpotifyPanel({ track, col }) {
   );
 }
 
+// ── Calendar Panel ────────────────────────────────────────────────────────────
+function CalendarPanel({ meetings, col }) {
+  if (!meetings || meetings.length === 0) {
+    return (
+      <Panel title="Calendar">
+        <div style={{ fontSize: 8, color: "#00e5ff33" }}>NO UPCOMING MEETINGS</div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="Calendar">
+      {meetings.map(m => (
+        <div key={m.id} style={{ marginBottom: 6, borderLeft: `2px solid ${col}`, paddingLeft: 6 }}>
+          <div style={{ fontSize: 9, color: "#fff", fontWeight: "bold" }}>{m.title.toUpperCase()}</div>
+          <div style={{ fontSize: 7, color: col, marginTop: 1 }}>
+            📅 {m.date} | 🕒 {m.time}
+          </div>
+        </div>
+      ))}
+    </Panel>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState("IDLE");
   const [userText, setUserText] = useState("");
@@ -467,6 +491,9 @@ export default function App() {
 
   // ── Spotify state ─────────────────────────────────────────────────────────
   const [spotifyTrack, setSpotifyTrack] = useState(null);
+
+  // ── Calendar state ─────────────────────────────────────────────────────────
+  const [meetings, setMeetings] = useState([]);
 
   const radarRef = useRef(null);
   const waveRef = useRef(null);
@@ -576,6 +603,24 @@ export default function App() {
     };
     fetchSpotify();
     const id = setInterval(fetchSpotify, 3000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Calendar fetch ───────────────────────────────────────────
+  useEffect(() => {
+    const fetchMeetings = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/meetings");
+        if (res.ok) {
+          const data = await res.json();
+          setMeetings(data);
+        }
+      } catch (e) {
+        console.warn("Meetings fetch failed:", e);
+      }
+    };
+    fetchMeetings();
+    const id = setInterval(fetchMeetings, 10000); // every 10s
     return () => clearInterval(id);
   }, []);
 
@@ -812,6 +857,31 @@ export default function App() {
               ws.send("__spotify_cmd__previous");
               speak("Going back to the previous track.");
               addLog("SPOTIFY: PREVIOUS");
+              return;
+            }
+          }
+
+          // Intent Detection: Calendar / Meetings
+          if (lowerText.includes("schedule a meeting") || lowerText.includes("set a meeting")) {
+            // Pattern: "schedule a meeting [title] [on] [date] at [time]"
+            // Example: "schedule a meeting with Tony on May 5th at 3 PM" or "schedule a meeting Lunch tomorrow at 1 PM"
+            const match = rawText.match(/(?:schedule|set) a meeting (.*?) (?:on )?(.*?) at (.*)/i);
+            if (match) {
+              const title = match[1].trim();
+              const date = match[2].trim();
+              const time = match[3].trim();
+
+              fetch("http://localhost:8000/meeting", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title, date, time })
+              }).then(() => {
+                speak(`Of course Swastik. I've scheduled your meeting, ${title}, for ${date} at ${time}.`);
+                addLog(`MEETING SET: ${title}`);
+              });
+              return;
+            } else {
+              speak("I'm sorry Swastik, could you please specify the title, date, and time for the meeting?");
               return;
             }
           }
@@ -1360,6 +1430,9 @@ export default function App() {
 
           {/* Live Reminders panel */}
           <RemindersPanel reminders={activeReminders} col={col} />
+
+          {/* Live Calendar panel */}
+          <CalendarPanel meetings={meetings} col={col} />
 
           {/* Spotify panel */}
           <SpotifyPanel track={spotifyTrack} col={col} />
