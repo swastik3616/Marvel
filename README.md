@@ -40,6 +40,7 @@ J.A.R.V.I.S. (Just A Rather Very Intelligent System) is a state-of-the-art deskt
 - **Automation:** Python-WinRT, PyAutoGUI, Pyperclip
 - **Hardware Stats:** psutil
 - **Audio:** Faster Whisper (STT), pyttsx3 (TTS), SpeechRecognition
+- **Calender** Storing the data with the time and date as an alarm
 
 ---
 
