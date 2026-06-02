@@ -1,6 +1,6 @@
 <div align="center">
   <img src="https://img.shields.io/badge/JARVIS-AI%20Assistant-00e5ff?style=for-the-badge&logo=openai" alt="JARVIS AI" />
-  <h1>J.A.R.V.I.S. AI Assistant</h1>
+  <h1>J.A.R.V.I.S. AI Assistant For Laptop</h1>
   <p><i>"The most advanced voice-activated desktop AI assistant, inspired by Stark Industries."</i></p>
 
   [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
